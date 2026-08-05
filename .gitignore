@@ -1,0 +1,19 @@
+# Python & Virtual Environments
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+env/
+
+# Data & Output Model Artifacts (Ignore heavy binaries)
+data/raw/*
+data/processed/*
+!data/raw/.gitkeep
+!data/processed/.gitkeep
+*.bin
+*.npz
+
+# IDEs & System Files
+.DS_Store
+.vscode/
+.idea/
