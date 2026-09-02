@@ -1,6 +1,7 @@
 import math
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
 import preprocess
 
 """
@@ -21,6 +22,35 @@ class GMMWordEmbedding(nn.Module):
         self.var_embeddings = nn.Embedding(vocab_size, K * self.D)
         self.mix_logits = nn.Embedding(vocab_size, K)
 
+        # Initialize weights with standard distributions
+        nn.init.uniform_(self.mu_embeddings.weight, -0.5 / self.D, 0.5 / self.D)
+        nn.init.uniform_(self.var_embeddings.weight, 0.1, 1.0) 
+        nn.init.zeros_(self.mixture_logits.weight)
+
+    def get_word_params(self, word_ids: torch.Tensor):
+        """
+        Given a batch of word ids, this method retrieves the corresponding means, variances, and mixture weights.
+        It reshapes the means and variances to have shape (batch_size, K, D) for further calculations.
+        """
+        batch_size = word_ids.shape[0]
+
+        # Get mu and var for word_ids as a 1D representation
+        mu = self.mu_embeddings(word_ids)
+        var = self.var_embeddings(word_ids)
+
+        # Ensure variance is strictly positive using Exponential or Softplus
+        var = F.softplus(var) + 1e-4
+
+        # Reshape from (batch_size, K*D) to (batch_size, K, D)
+        mu = mu.view(batch_size, self.K, self.D)
+        var = var.view(batch_size, self.K, self.D)
+
+        # Use softmax to convert logits to probabilities for mixture weights
+        mix_logits = self.mix_logits(word_ids)
+        mix_weights = torch.softmax(mix_logits, dim=-1)  # Convert logits to probabilities
+        
+        return mu, var, mix_weights
+    
     @staticmethod
     def log_overlap(mu1, mu2, var1, var2):
         """
@@ -99,11 +129,13 @@ class GMMWordEmbedding(nn.Module):
         # Return the log of the sum to get the final GMM energy in log space
         return torch.log(sum_over_components)  # Shape: (batch_size,)
 
-    def forward(self, target_ids, ctx_ids):
+    def forward(self, target_ids: torch.Tensor, ctx_ids: torch.Tensor):
         """
         Forward pass execution method for PyTorch.
         Takes a batch of target and context word ids and returns the energy score for the whole batch.
         """
+        # Look up target word parameters (means, variances, mixture weights)
+        mu1, var1, p1 = self.get_word_para
 
 
     @staticmethod
