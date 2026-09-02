@@ -2,7 +2,6 @@ import math
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import preprocess
 
 """
 gmm_word_embedding contains the GMM energy function implementation for training the word embedding model.
@@ -25,7 +24,7 @@ class GMMWordEmbedding(nn.Module):
         # Initialize weights with standard distributions
         nn.init.uniform_(self.mu_embeddings.weight, -0.5 / self.D, 0.5 / self.D)
         nn.init.uniform_(self.var_embeddings.weight, 0.1, 1.0) 
-        nn.init.zeros_(self.mixture_logits.weight)
+        nn.init.zeros_(self.mix_logits.weight)
 
     def get_word_params(self, word_ids: torch.Tensor):
         """
@@ -48,7 +47,7 @@ class GMMWordEmbedding(nn.Module):
         # Use softmax to convert logits to probabilities for mixture weights
         mix_logits = self.mix_logits(word_ids)
         mix_weights = torch.softmax(mix_logits, dim=-1)  # Convert logits to probabilities
-        
+
         return mu, var, mix_weights
     
     @staticmethod
@@ -127,7 +126,7 @@ class GMMWordEmbedding(nn.Module):
         sum_over_components = torch.sum(weighted_sum, dim=(-2, -1))  # Shape: (batch_size,) <- this is the final energy score for each batch item
 
         # Return the log of the sum to get the final GMM energy in log space
-        return torch.log(sum_over_components)  # Shape: (batch_size,)
+        return torch.log(sum_over_components + 1e-8)  # Shape: (batch_size,)
 
     def forward(self, target_ids: torch.Tensor, ctx_ids: torch.Tensor):
         """
@@ -135,18 +134,31 @@ class GMMWordEmbedding(nn.Module):
         Takes a batch of target and context word ids and returns the energy score for the whole batch.
         """
         # Look up target word parameters (means, variances, mixture weights)
-        mu1, var1, p1 = self.get_word_para
+        mu1, var1, p1 = self.get_word_params(target_ids)
+        mu2, var2, p2 = self.get_word_params(ctx_ids)
+
+        # Create log overlap matrix
+        overlap = self.log_overlap(mu1, mu2, var1, var2)
+
+        # Calculate total GMM energy based on the overlaps and the probability weights
+        gmm_energy = self.gmm_energy(overlap, p1, p2)
+
+        return gmm_energy
 
 
     @staticmethod
-    def max_margin_ranking(word, context, negative_context):
+    def max_margin_ranking(E_pos: torch.Tensor, E_neg: torch.Tensor, margin: float = 1.0):
         """
         Loss function: Step 3
-        Computes the max-margin ranking loss for a given word, its context, and negative context words.
-        Because our GMM energy function returns a result in log-space, we can directly use it to compute the loss.
+        Computes hinged margin ranking loss on paired energies. 
+        This ensures that backpropogation pulls positive pairs closer together and pushes negative pairs away.
 
         Math:
             L = max(0, margin - E(word, context) + E(word, negative_context))
         """
-        # Positive energy
-        pos_energy = gmm_
+        # margin - E_pos + E_neg
+        losses = margin - E_pos + E_neg
+
+        hinge_loss = torch.clamp(losses, min=0.0)
+
+        return torch.mean(hinge_loss)
