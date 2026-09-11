@@ -1,9 +1,10 @@
 import numpy as np
 import torch
+from torch.utils.data import Dataset
 """
 SkipGramDataset uses .memmap to read an indexed corpus .bin to get center and ctx words from our corpus.
 """
-def SkipGramDataset():
+class SkipGramDataset(Dataset):
     def __init__(self, bin_file: str, window_size: int = 5, dtype = np.uint16):
         # memmap allows us to read the corpus without loading it all into RAM
         self.data = np.memmap(bin_file, dtype = dtype, mode = 'r')
