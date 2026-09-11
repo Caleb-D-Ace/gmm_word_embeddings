@@ -3,7 +3,7 @@ import re
 import struct
 from collections import Counter
 from pathlib import Path
-from typing import Dict, Iterator, Union
+from typing import Dict, Iterator, Tuple, Union
 
 """
 Preprocess.py prepares a corpus for training.
@@ -48,26 +48,21 @@ def preprocess_corpus(raw_dir: str = "data/raw", processed_dir: str = "data/proc
 
     # Build the vocab mappings from the frequency chart...
     filtered_freq: list[tuple[str, int]] = [(word, count) for word, count in raw_freq.most_common() if count >= MIN_FREQ]
-    word_to_id: Dict[str, int] = {word: rank for rank, (word, _) in enumerate(filtered_freq)}
-    id_to_word: Dict[int, str] = {rank: word for rank, (word, _) in enumerate(filtered_freq)}
-    id_to_freq: Dict[int, int] = {rank: count for rank, (_, count) in enumerate(filtered_freq)}
+    # Keep in mind that this means that the list is already sorted by frequency. Key order == id order
+    vocab: Dict[str, Tuple[int, int]] = {word: (rank, count) for rank, (word, count) in enumerate(filtered_freq)}
 
     # ...and then store the indexes in json format.
-    with open(processed_path / "word_to_id.json", "w", encoding="utf-8") as f:
-        json.dump(word_to_id, f, ensure_ascii=False)
-    with open(processed_path / "id_to_word.json", "w", encoding="utf-8") as f:
-        json.dump(id_to_word, f, ensure_ascii=False)
-    with open(processed_path / "id_to_freq.json", "w", encoding="utf-8") as f:
-        json.dump(id_to_freq, f, ensure_ascii=False)    # Make sure to generate id_to_word and id_to_freq together so they are in sync
-
-    use_uint16: bool = len(word_to_id) <= 65535
+    with open(processed_path / "sorted_vocab.json", "w", encoding="utf-8") as f:
+        json.dump(vocab, f, ensure_ascii=False)
+    
+    use_uint16: bool = len(vocab) <= 65535
     encoding_width = 'H' if use_uint16 else 'I'
 
     # Write data to binary file
     out_file = processed_path / "corpus_index.bin"
     with open(out_file, "wb") as f_out:
         for word in token_streamer(raw_path):
-            word_id = word_to_id.get(word)
+            word_id = vocab.get(word)[0] if word in vocab else None
             if word_id is not None:
                 # Pack the integer into binary and store it
                 f_out.write(struct.pack(encoding_width, word_id))
