@@ -47,14 +47,18 @@ def preprocess_corpus(raw_dir: str = "data/raw", processed_dir: str = "data/proc
     raw_freq = Counter(corpus_streamer(raw_path))
 
     # Build the vocab mappings from the frequency chart...
-    filtered_freq: list[str] = [word for word, count in raw_freq.most_common() if count >= MIN_FREQ]
-    word_to_id: Dict[str, int] = {word: rank for rank, word in enumerate(filtered_freq)}
-    id_to_word: Dict[int, str] = {rank: word for rank, word in enumerate(filtered_freq)}
+    filtered_freq: list[tuple[str, int]] = [(word, count) for word, count in raw_freq.most_common() if count >= MIN_FREQ]
+    word_to_id: Dict[str, int] = {word: rank for rank, (word, _) in enumerate(filtered_freq)}
+    id_to_word: Dict[int, str] = {rank: word for rank, (word, _) in enumerate(filtered_freq)}
+    id_to_freq: Dict[int, int] = {rank: count for rank, (_, count) in enumerate(filtered_freq)}
+
     # ...and then store the indexes in json format.
     with open(processed_path / "word_to_id.json", "w", encoding="utf-8") as f:
         json.dump(word_to_id, f, ensure_ascii=False)
     with open(processed_path / "id_to_word.json", "w", encoding="utf-8") as f:
         json.dump(id_to_word, f, ensure_ascii=False)
+    with open(processed_path / "id_to_freq.json", "w", encoding="utf-8") as f:
+        json.dump(id_to_freq, f, ensure_ascii=False)    # Make sure to generate id_to_word and id_to_freq together so they are in sync
 
     use_uint16: bool = len(word_to_id) <= 65535
     encoding_width = 'H' if use_uint16 else 'I'
