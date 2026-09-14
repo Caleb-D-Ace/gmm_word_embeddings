@@ -22,7 +22,7 @@ class SkipGramDataset(Dataset):
         
         # Get context words
         left_bound = idx
-        right_bound = center_idx + self.window_size
+        right_bound = center_idx + self.window_size + 1
 
         left_ctx = self.data[left_bound : center_idx]
         right_ctx = self.data[center_idx + 1 : right_bound]
