@@ -61,7 +61,7 @@ def preprocess_corpus(raw_dir: str = "data/raw", processed_dir: str = "data/proc
     # Write data to binary file
     out_file = processed_path / "corpus_index.bin"
     with open(out_file, "wb") as f_out:
-        for word in token_streamer(raw_path):
+        for word in corpus_streamer(raw_path):
             word_id = vocab.get(word)[0] if word in vocab else None
             if word_id is not None:
                 # Pack the integer into binary and store it
