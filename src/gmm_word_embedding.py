@@ -128,6 +128,7 @@ class GMMWordEmbedding(nn.Module):
         # Return the log of the sum to get the final GMM energy in log space
         return torch.log(sum_over_components + 1e-8)  # Shape: (batch_size,)
 
+
     def forward(self, target_ids: torch.Tensor, ctx_ids: torch.Tensor):
         """
         Forward pass execution method for PyTorch.
