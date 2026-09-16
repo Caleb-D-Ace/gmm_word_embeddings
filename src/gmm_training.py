@@ -52,9 +52,25 @@ class GmmTrainer:
         # 3. Instantiate pipelines
         embedding_model = GMMWordEmbedding(vocab_size, self.config.embedding_dim, self.config.K).to(self.device)
         dataset = SkipGramDataset(bin_file=Path(self.config.processed_dir) / "corpus_index.bin", window_size=self.config.window_size)
-        sampler = NegativeSampler(vocab_size, word_counts=word_count_list)
+        sampler = NegativeSampler(word_counts=word_count_list)
 
         # 4. Training loop
+        #   - Reshape the SkipGramDataset output to match a tensor of (target, context) pairs
 
         # 5. Save the trained model
         pass
+
+    @staticmethod
+    def reshape(centers: torch.Tensor, contexts: torch.Tensor) -> torch.Tensor:
+        """
+        Reshapes the center/context word embeddings from SkipGramDataset to match the expected input shape for the GMMWordEmbedding model.
+        Parameters:
+            centers - Tensor of shape (batch_size,)
+            contexts - Tensor of shape (batch_size, 2*window_size)
+        Returns:
+            reshaped_tensor - Tensor of shape (batch_size, 2*window_size,)
+        """
+        repeated_centers = torch.repeat_interleave(centers, contexts.size(1))
+        flat_ctx = contexts.flatten()
+        reshaped_tensor = torch.stack((repeated_centers, flat_ctx), dim=0)
+        return reshaped_tensor
