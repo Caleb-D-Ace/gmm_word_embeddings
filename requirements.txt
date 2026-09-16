@@ -1,4 +1,5 @@
 numpy>=1.20.0
 tqdm
 pytest
+datasets>=2.0.0
 # Note: Install torch (PyTorch) separately based on your local GPU/CPU hardware
