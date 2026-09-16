@@ -14,7 +14,11 @@ This repository is an offline training pipeline that turns a raw text corpus int
 
 Training happens in two independent stages:
 
-1. **Preprocessing** (`src/preprocess.py`) — reads every file under `data/raw/`, tokenizes it, and builds a vocabulary of every word occurring at least `MIN_FREQ` times (40 by default — currently a constant at the top of the file, not yet a command-line option). It writes:
+1. **Preprocessing** (`src/preprocess.py`) — tokenizes a corpus from one of two sources and builds a vocabulary of every word occurring at least `MIN_FREQ` times (40 by default — currently a constant at the top of the file, not yet a command-line option):
+   - **Local files** (default) — every file under `--raw_dir` (default `data/raw/`), searched recursively. Plain text files are tokenized directly; `.jsonl` files have a configurable field (`--text_key`, default `text`) pulled out of each line first, so a pre-downloaded dump of JSON records works without conversion.
+   - **A Hugging Face Hub dataset** (`--hf_dataset`, e.g. `wikimedia/wikipedia`, with optional `--hf_config`/`--hf_split`) — downloaded and cached by the [`datasets`](https://pypi.org/project/datasets/) library instead of being saved into `data/raw/`. `datasets` is an optional dependency, only needed for this path.
+
+   Either way, it writes:
    - `data/processed/sorted_vocab.json` — a single mapping of `word -> (id, frequency count)`, ordered by descending frequency, so a word's position in the file is also its integer id.
    - `data/processed/corpus_index.bin` — the entire corpus re-encoded as a flat binary array of those integer ids, for fast memory-mapped reading during training.
 
@@ -22,11 +26,11 @@ Training happens in two independent stages:
 
 ## Project status
 
-- [x] Preprocessing (`preprocess.py`)
+- [x] Preprocessing (`preprocess.py`) — local text/`.jsonl` files or a Hugging Face Hub dataset
 - [x] Negative sampler (`sampler.py`)
 - [x] Corpus dataset loader (`dataset.py`)
 - [x] GMM energy model and loss functions (`gmm_word_embedding.py`)
-- [ ] Training loop (`gmm_training.py`) — in progress
+- [ ] Training loop (`gmm_training.py`) — vocabulary loading and pipeline setup are done; the training loop itself and saving the trained model are still in progress
 - [ ] Command-line training entry point (`main.py`) — argument parsing is in place, but not usable end-to-end until the training loop above is finished
 
 Command-line usage for training will be documented here once `main.py` is complete.
@@ -49,14 +53,20 @@ Command-line usage for training will be documented here once `main.py` is comple
    pip install -r requirements.txt
    ```
 
-3. Place your raw corpus (one or more text files, in any subfolder structure) inside `data/raw/`.
+3. Choose a corpus source:
+   - **Bring your own corpus** — place text or `.jsonl` files (any subfolder structure) inside `data/raw/`.
+   - **Or download one from Hugging Face instead** — skip this step and pass `--hf_dataset` in step 4.
 
 4. Run preprocessing from the project root:
 
    ```bash
+   # Using your own local corpus in data/raw/
    python src/preprocess.py
+
+   # Or downloading a dataset from Hugging Face instead
+   python src/preprocess.py --hf_dataset wikimedia/wikipedia --hf_config 20231101.simple
    ```
 
-   This produces `data/processed/sorted_vocab.json` and `data/processed/corpus_index.bin`.
+   This produces `data/processed/sorted_vocab.json` and `data/processed/corpus_index.bin`. Run `python src/preprocess.py --help` for the full list of options (custom `--raw_dir`/`--processed_dir`, `--text_key`, `--hf_split`, etc.).
 
 Training instructions will be added once `main.py` is finished.
