@@ -23,8 +23,8 @@ def parse_args() -> TrainingConfig:
     parser.add_argument(
         "--output_path",
         type=str,
-        default="data/model/gmm_embeddings.npz",
-        help="Where to save the trained model (default: data/model/gmm_embeddings.npz)"
+        default="data/model",
+        help="Where to save the trained model (default: data/model/gmm_embeddings.[filetype])\n\tFiles are saved in both a .npz and a .pt format."
     )
     parser.add_argument(
         "--embedding_dim",
@@ -71,7 +71,7 @@ def parse_args() -> TrainingConfig:
     parser.add_argument(
         "--num_negatives",
         type=int,
-        default=5,
+        default=1,
         help="Negative samples drawn per positive pair (default: 5)"
     )
 
