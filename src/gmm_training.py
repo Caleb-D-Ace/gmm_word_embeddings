@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import json
 from pathlib import Path
+import numpy as np
 import torch
 from torch.utils.data import DataLoader
 
@@ -13,7 +14,7 @@ from sampler import NegativeSampler
 @dataclass
 class TrainingConfig:
     processed_dir: str = "data/processed"
-    output_path: str = "data/model/gmm_embeddings.npz"
+    output_path: str = "data/model"
     embedding_dim: int = 50
     K: int = 2
     window_size: int = 5
@@ -80,7 +81,22 @@ class GmmTrainer:
                 optimizer.zero_grad()
 
         # 5. Save the trained model
-        pass
+        output_dir = Path(self.config.output_path)
+        output_dir.mkdir(parents=True, exist_ok=True)
+
+        # get_word_params applies the same softplus/softmax transforms used during training,
+        # so the saved arrays are ready-to-use variances/mixture weights, not raw logits.
+        with torch.no_grad():
+            all_ids = torch.arange(vocab_size, device=self.device)
+            mu, var, mix_weights = embedding_model.get_word_params(all_ids)
+
+        np.savez(
+            output_dir / "gmm_embeddings.npz",
+            mu=mu.cpu().numpy(),
+            var=var.cpu().numpy(),
+            mix_weights=mix_weights.cpu().numpy(),
+        )
+        torch.save(embedding_model.state_dict(), output_dir / "gmm_embeddings.pt")
 
     @staticmethod
     def reshape(centers: torch.Tensor, contexts: torch.Tensor) -> torch.Tensor:
