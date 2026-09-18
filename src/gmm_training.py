@@ -21,8 +21,8 @@ class TrainingConfig:
     epochs: int = 5
     lr: float = 1e-3
     margin: float = 1.0
-    num_negatives: int = 5
-
+    num_negatives: int = 1  # DO NOT CHANGE THIS VALUE. Code to support multiple negative samples is not yet implemented.
+    
 
 """
 GmmTrainer runs through the .memmap file created by gmm_word_embedding.py, passes its data into PyTorch, and trains a probablistic
@@ -54,8 +54,30 @@ class GmmTrainer:
         dataset = SkipGramDataset(bin_file=Path(self.config.processed_dir) / "corpus_index.bin", window_size=self.config.window_size)
         sampler = NegativeSampler(word_counts=word_count_list)
 
+        # Create DataLoader for batching and optimizer
+        dataloader = DataLoader(dataset, batch_size=self.config.batch_size, shuffle=True)
+        optimizer = torch.optim.Adam(embedding_model.parameters(), lr=self.config.lr)
+
         # 4. Training loop
-        #   - Reshape the SkipGramDataset output to match a tensor of (target, context) pairs
+        for epoch in range(self.config.epochs):
+            for batch_idx, (centers, contexts) in enumerate(dataloader):
+                centers = centers.to(self.device)
+                contexts = contexts.to(self.device)
+
+                # Reshape the output of SkipGramDataset to match input shape of (target, context)
+                target_ids, ctx_ids = self.reshape(centers, contexts)
+                # Get our negative samples for this batch
+                negative_samples = sampler.sample(self.config.num_negatives * ctx_ids.size(0)).to(self.device)
+
+                # Get positive and negative energies for this batch
+                E_pos = embedding_model.forward(target_ids, ctx_ids)
+                E_neg = embedding_model.forward(target_ids, negative_samples)
+
+                # Compute the max-margin ranking loss
+                loss = embedding_model.max_margin_ranking(E_pos, E_neg, self.config.margin)
+                loss.backward()
+                optimizer.step()
+                optimizer.zero_grad()
 
         # 5. Save the trained model
         pass
@@ -68,7 +90,9 @@ class GmmTrainer:
             centers - Tensor of shape (batch_size,)
             contexts - Tensor of shape (batch_size, 2*window_size)
         Returns:
-            reshaped_tensor - Tensor of shape (batch_size, 2*window_size,)
+            reshaped_tensor - Tensor of shape (2, batch_size * 2*window_size), meant to be unpacked as
+                target_ids, ctx_ids = reshape(centers, contexts)
+                each of shape (batch_size * 2*window_size,), aligned so target_ids[i] is paired with ctx_ids[i]
         """
         repeated_centers = torch.repeat_interleave(centers, contexts.size(1))
         flat_ctx = contexts.flatten()
