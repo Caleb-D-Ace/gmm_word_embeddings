@@ -72,7 +72,13 @@ def parse_args() -> TrainingConfig:
         "--num_negatives",
         type=int,
         default=1,
-        help="Negative samples drawn per positive pair (default: 5)"
+        help="Negative samples drawn per positive pair (default: 1)"
+    )
+    parser.add_argument(
+        "--checkpoint_every",
+        type=int,
+        default=0,
+        help="Save a checkpoint every N epochs into output_path/epoch_<N>/, in addition to the final save (default: 0, disabled)"
     )
 
     args = parser.parse_args()

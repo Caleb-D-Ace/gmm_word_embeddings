@@ -23,7 +23,8 @@ class TrainingConfig:
     lr: float = 1e-3
     margin: float = 1.0
     num_negatives: int = 1  # DO NOT CHANGE THIS VALUE. Code to support multiple negative samples is not yet implemented.
-    
+    checkpoint_every: int = 0  # 0 disables checkpointing; e.g. 10 saves a snapshot every 10 epochs into output_path/epoch_<N>/
+
 
 """
 GmmTrainer runs through the .memmap file created by gmm_word_embedding.py, passes its data into PyTorch, and trains a probablistic
@@ -80,8 +81,24 @@ class GmmTrainer:
                 optimizer.step()
                 optimizer.zero_grad()
 
+            # Periodic checkpoint: lets you compare embedding quality across epochs later,
+            # without waiting for the full run to finish.
+            if self.config.checkpoint_every and (epoch + 1) % self.config.checkpoint_every == 0:
+                self.save_model(vocab, vocab_size, embedding_model, subdir=f"epoch_{epoch + 1}")
+
         # 5. Save the trained model
+        self.save_model(vocab, vocab_size, embedding_model)
+
+    """
+    Method to save the trained GMM embeddings and the vocabulary to disk. The embeddings are saved in both .npz and .pt formats.
+    Parameters:
+        subdir - optional subdirectory name under output_path (e.g. "epoch_10") for a mid-training checkpoint;
+                 omitted for the final save, which writes directly into output_path as before.
+    """
+    def save_model(self, vocab, vocab_size, embedding_model, subdir: str = None):
         output_dir = Path(self.config.output_path)
+        if subdir is not None:
+            output_dir = output_dir / subdir
         output_dir.mkdir(parents=True, exist_ok=True)
 
         # get_word_params applies the same softplus/softmax transforms used during training,
@@ -97,6 +114,11 @@ class GmmTrainer:
             mix_weights=mix_weights.cpu().numpy(),
         )
         torch.save(embedding_model.state_dict(), output_dir / "gmm_embeddings.pt")
+
+        # Keep a copy of the vocab alongside the model it was actually trained on, so the two
+        # never drift apart even if data/processed/ gets re-preprocessed later.
+        with open(output_dir / "sorted_vocab.json", "w", encoding="utf-8") as f:
+            json.dump(vocab, f, ensure_ascii=False)
 
     @staticmethod
     def reshape(centers: torch.Tensor, contexts: torch.Tensor) -> torch.Tensor:
