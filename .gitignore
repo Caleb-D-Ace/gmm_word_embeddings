@@ -8,10 +8,12 @@ env/
 # Data & Output Model Artifacts (Ignore heavy binaries)
 data/raw/*
 data/processed/*
+.pytest_cache/
 !data/raw/.gitkeep
 !data/processed/.gitkeep
 *.bin
 *.npz
+*.pt
 
 # IDEs & System Files
 .DS_Store
