@@ -2,6 +2,7 @@ from dataclasses import dataclass
 
 import json
 from pathlib import Path
+import logging
 import numpy as np
 import torch
 from torch.utils.data import DataLoader
@@ -9,6 +10,8 @@ from torch.utils.data import DataLoader
 from dataset import SkipGramDataset
 from gmm_word_embedding import GMMWordEmbedding
 from sampler import NegativeSampler
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -81,12 +84,12 @@ class GmmTrainer:
                 optimizer.step()
                 optimizer.zero_grad()
 
-            # Periodic checkpoint: lets you compare embedding quality across epochs later,
-            # without waiting for the full run to finish.
+            # Periodic checkpoint: Saves a model after every N epochs
             if self.config.checkpoint_every and (epoch + 1) % self.config.checkpoint_every == 0:
                 self.save_model(vocab, vocab_size, embedding_model, subdir=f"epoch_{epoch + 1}")
+            logger.info(f"Epoch {epoch + 1}/{self.config.epochs} completed. Loss: {loss.item():.4f}")
 
-        # 5. Save the trained model
+        # 5. Save the final trained model
         self.save_model(vocab, vocab_size, embedding_model)
 
     """
