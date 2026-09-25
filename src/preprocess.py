@@ -6,6 +6,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterator, Tuple, Union
 
+from stopwords import load_stopwords
+
 """
 Preprocess.py prepares a corpus for training.
     - Tokenizes every word in the corpus (from local text/.jsonl files, or a Hugging Face dataset)
@@ -63,7 +65,7 @@ def _local_corpus_streamer(raw_dir: Union[str, Path], text_key: str = 'text') ->
         raise FileNotFoundError(f"Corpus input path {raw_dir} does not exist.")
 
 # Method to stream tokens from a Hugging Face Hub dataset instead of local files.
-# `datasets` is imported lazily so it stays an optional dependency for users who only ever supply their own corpus.
+# `datasets` is imported lazily so it stays an optional dependency.
 def hf_dataset_streamer(hf_dataset: str, hf_config: Union[str, None] = None, hf_split: str = 'train', text_key: str = 'text') -> Iterator[str]:
     try:
         from datasets import load_dataset
@@ -83,13 +85,19 @@ def corpus_streamer(
     hf_config: Union[str, None] = None,
     hf_split: str = 'train',
     text_key: str = 'text',
+    stopwords: frozenset = frozenset(),
 ) -> Iterator[str]:
     if hf_dataset is not None:
-        yield from hf_dataset_streamer(hf_dataset, hf_config, hf_split, text_key)
+        tokens = hf_dataset_streamer(hf_dataset, hf_config, hf_split, text_key)
     elif raw_dir is not None:
-        yield from _local_corpus_streamer(raw_dir, text_key)
+        tokens = _local_corpus_streamer(raw_dir, text_key)
     else:
         raise ValueError("Either raw_dir or hf_dataset must be provided.")
+
+    # Dropped before counting or encoding, so stopwords never reach the vocabulary or the encoded corpus
+    for token in tokens:
+        if token not in stopwords:
+            yield token
 
 # Method to turn a corpus of data into an indexed representation of the corpus and save the resulting word/id mappings as json files for later use.
 def preprocess_corpus(
@@ -99,6 +107,7 @@ def preprocess_corpus(
     hf_config: Union[str, None] = None,
     hf_split: str = "train",
     text_key: str = "text",
+    stopwords: str = "english",
 ):
     # Establish directories
     processed_path = Path(processed_dir)
@@ -111,6 +120,7 @@ def preprocess_corpus(
         hf_config=hf_config,
         hf_split=hf_split,
         text_key=text_key,
+        stopwords=load_stopwords(stopwords),
     )
 
     # Make a counter object to hold the streamed corpus. This allows us to cull infrequent words.
@@ -168,6 +178,11 @@ def main():
         "--hf_split", type=str, default="train",
         help="Dataset split to use for a Hugging Face dataset (default: train)"
     )
+    parser.add_argument(
+        "--stopwords", type=str, default="english",
+        help="Words to drop before building the vocabulary: 'english' (built-in list), 'none', or a path to a text file "
+             "with one word per line (default: english)"
+    )
 
     args = parser.parse_args()
 
@@ -178,6 +193,7 @@ def main():
         hf_config=args.hf_config,
         hf_split=args.hf_split,
         text_key=args.text_key,
+        stopwords=args.stopwords,
     )
 
 # Ensures code doesn't automatically run when imported into another file
