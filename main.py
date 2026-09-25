@@ -57,10 +57,23 @@ def parse_args() -> TrainingConfig:
         help="Number of training epochs (default: 50)"
     )
     parser.add_argument(
+        "--optimizer",
+        type=str,
+        choices=["adam", "adagrad"],
+        default="adam",
+        help="Optimizer (default: adam)"
+    )
+    parser.add_argument(
         "--lr",
         type=float,
-        default=1e-3,
-        help="Learning rate (default: 1e-3)"
+        default=0.01,
+        help="Initial learning rate (default: 0.01); decays linearly to --lr_final over the whole run"
+    )
+    parser.add_argument(
+        "--lr_final",
+        type=float,
+        default=1e-5,
+        help="Learning rate reached at the end of training (default: 1e-5)"
     )
     parser.add_argument(
         "--margin",
