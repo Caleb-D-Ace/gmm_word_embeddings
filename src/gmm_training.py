@@ -26,7 +26,9 @@ class TrainingConfig:
     window_size: int = 5
     batch_size: int = 256
     epochs: int = 5
-    lr: float = 1e-3
+    optimizer: str = "adam"  # "adam" or "adagrad"
+    lr: float = 0.01  # Initial learning rate; decays linearly to lr_final over the whole run. 
+    lr_final: float = 1e-5
     margin: float = 1.0
     num_negatives: int = 1  # DO NOT CHANGE THIS VALUE. Code to support multiple negative samples is not yet implemented.
     checkpoint_every: int = 0  # 0 disables checkpointing; e.g. 10 saves a snapshot every 10 epochs into output_path/epoch_<N>/
@@ -63,7 +65,11 @@ class GmmTrainer:
 
         # Create DataLoader for batching and optimizer
         dataloader = DataLoader(dataset, batch_size=self.config.batch_size, shuffle=True)
-        optimizer = torch.optim.Adam(embedding_model.parameters(), lr=self.config.lr)
+        optimizer = self.make_optimizer(embedding_model.parameters())
+        total_steps = self.config.epochs * len(dataloader)
+        scheduler = torch.optim.lr_scheduler.LinearLR(
+            optimizer, start_factor=1.0, end_factor=self.config.lr_final / self.config.lr, total_iters=total_steps
+        )
 
         # 4. Training loop
         # Create MetricsLogger object for logging
@@ -71,8 +77,7 @@ class GmmTrainer:
             for epoch in range(self.config.epochs):
                 # Set starting epoch timestamp
                 epoch_start_time = time.perf_counter()
-                # Loss is a per-batch mean, so weight each batch by its pair count to get an exact epoch average
-                # even when the last batch is smaller.
+                # Weight each batch's mean loss by its pair count so the epoch average is exact
                 epoch_loss_sum = 0.0
                 epoch_pair_count = 0
 
@@ -96,6 +101,7 @@ class GmmTrainer:
                     loss = embedding_model.max_margin_ranking(e_pos, e_neg, self.config.margin)
                     loss.backward()
                     optimizer.step()
+                    scheduler.step()
                     optimizer.zero_grad()
 
                     # Calculate time and other metric parameters
@@ -122,6 +128,13 @@ class GmmTrainer:
         # 5. Save the final trained model
         self.save_model(vocab, vocab_size, embedding_model)
 
+    def make_optimizer(self, parameters):
+        if self.config.optimizer == "adam":
+            return torch.optim.Adam(parameters, lr=self.config.lr)
+        if self.config.optimizer == "adagrad":
+            return torch.optim.Adagrad(parameters, lr=self.config.lr)
+        raise ValueError(f"Unknown optimizer '{self.config.optimizer}'. Use 'adagrad' or 'adam'.")
+
     """
     Method to save the trained GMM embeddings and the vocabulary to disk. The embeddings are saved in both .npz and .pt formats.
     Parameters:
@@ -134,8 +147,7 @@ class GmmTrainer:
             output_dir = output_dir / subdir
         output_dir.mkdir(parents=True, exist_ok=True)
 
-        # get_word_params applies the same softplus/softmax transforms used during training,
-        # so the saved arrays are ready-to-use variances/mixture weights, not raw logits.
+        # get_word_params applies softplus/softmax, so the saved arrays are usable variances and mixture weights, not raw logits
         with torch.no_grad():
             all_ids = torch.arange(vocab_size, device=self.device)
             mu, var, mix_weights = embedding_model.get_word_params(all_ids)
@@ -148,8 +160,7 @@ class GmmTrainer:
         )
         torch.save(embedding_model.state_dict(), output_dir / "gmm_embeddings.pt")
 
-        # Keep a copy of the vocab alongside the model it was actually trained on, so the two
-        # never drift apart even if data/processed/ gets re-preprocessed later.
+        # Keep a copy of the vocab with the model it was trained on so the two can't drift apart
         with open(output_dir / "sorted_vocab.json", "w", encoding="utf-8") as f:
             json.dump(vocab, f, ensure_ascii=False)
 
