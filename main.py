@@ -80,6 +80,12 @@ def parse_args() -> TrainingConfig:
         default=0,
         help="Save a checkpoint every N epochs into output_path/epoch_<N>/, in addition to the final save (default: 0, disabled)"
     )
+    parser.add_argument(
+        "--log_dir",
+        type=str,
+        default="logs/",
+        help="Where to save the training logs (default: data/logs)"
+    )
 
     args = parser.parse_args()
     return TrainingConfig(**vars(args))

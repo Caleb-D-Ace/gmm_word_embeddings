@@ -1,5 +1,6 @@
 from dataclasses import dataclass
 
+from datetime import time
 import json
 from pathlib import Path
 import logging
@@ -9,15 +10,17 @@ from torch.utils.data import DataLoader
 
 from dataset import SkipGramDataset
 from gmm_word_embedding import GMMWordEmbedding
+import metrics_logger
 from sampler import NegativeSampler
 
 logger = logging.getLogger(__name__)
-
+logging.basicConfig(level=logging.INFO)
 
 @dataclass
 class TrainingConfig:
     processed_dir: str = "data/processed"
     output_path: str = "data/model"
+    log_dir: str = "logs/"
     embedding_dim: int = 50
     K: int = 2
     window_size: int = 5
@@ -27,7 +30,6 @@ class TrainingConfig:
     margin: float = 1.0
     num_negatives: int = 1  # DO NOT CHANGE THIS VALUE. Code to support multiple negative samples is not yet implemented.
     checkpoint_every: int = 0  # 0 disables checkpointing; e.g. 10 saves a snapshot every 10 epochs into output_path/epoch_<N>/
-
 
 """
 GmmTrainer runs through the .memmap file created by gmm_word_embedding.py, passes its data into PyTorch, and trains a probablistic
@@ -64,30 +66,49 @@ class GmmTrainer:
         optimizer = torch.optim.Adam(embedding_model.parameters(), lr=self.config.lr)
 
         # 4. Training loop
-        for epoch in range(self.config.epochs):
-            for batch_idx, (centers, contexts) in enumerate(dataloader):
-                centers = centers.to(self.device)
-                contexts = contexts.to(self.device)
+        # Create MetricsLogger object for logging
+        with metrics_logger.MetricsLogger(self.config.log_dir) as metrics:
+            for epoch in range(self.config.epochs):
+                # Set starting epoch timestamp
+                start_epoch = time.perf_counter()
 
-                # Reshape the output of SkipGramDataset to match input shape of (target, context)
-                target_ids, ctx_ids = self.reshape(centers, contexts)
-                # Get our negative samples for this batch
-                negative_samples = sampler.sample(self.config.num_negatives * ctx_ids.size(0)).to(self.device)
+                for batch_idx, (centers, contexts) in enumerate(dataloader):
+                    # Set starting batch timestamp
+                    start_batch = time.perf_counter()
 
-                # Get positive and negative energies for this batch
-                E_pos = embedding_model.forward(target_ids, ctx_ids)
-                E_neg = embedding_model.forward(target_ids, negative_samples)
+                    centers = centers.to(self.device)
+                    contexts = contexts.to(self.device)
 
-                # Compute the max-margin ranking loss
-                loss = embedding_model.max_margin_ranking(E_pos, E_neg, self.config.margin)
-                loss.backward()
-                optimizer.step()
-                optimizer.zero_grad()
+                    # Reshape the output of SkipGramDataset to match input shape of (target, context)
+                    target_ids, ctx_ids = self.reshape(centers, contexts)
+                    # Get our negative samples for this batch
+                    negative_samples = sampler.sample(self.config.num_negatives * ctx_ids.size(0)).to(self.device)
 
-            # Periodic checkpoint: Saves a model after every N epochs
-            if self.config.checkpoint_every and (epoch + 1) % self.config.checkpoint_every == 0:
-                self.save_model(vocab, vocab_size, embedding_model, subdir=f"epoch_{epoch + 1}")
-            logger.info(f"Epoch {epoch + 1}/{self.config.epochs} completed. Loss: {loss.item():.4f}")
+                    # Get positive and negative energies for this batch
+                    E_pos = embedding_model.forward(target_ids, ctx_ids)
+                    E_neg = embedding_model.forward(target_ids, negative_samples)
+
+                    # Compute the max-margin ranking loss
+                    loss = embedding_model.max_margin_ranking(E_pos, E_neg, self.config.margin)
+                    loss.backward()
+                    optimizer.step()
+                    optimizer.zero_grad()
+
+                    # Calculate time
+                    batch_elapsed_sec = time.perf_counter() - start_batch
+                    epoch_elapsed_sec = time.perf_counter() - start_epoch # This aggregates over each batch until we finish the epoch.
+
+                    metrics.writeRow(
+                        epoch=epoch, batch=batch_idx, epoch_sec=epoch_elapsed_sec,
+                        batch_sec=batch_elapsed_sec, loss=0, pos_energy= 0,
+                        neg_energy= 0, active_pair=0, grad_norm=0,
+                        mix_weight=0, var_min=0, var_max=0, var_mean=0
+                    )
+
+                # Periodic checkpoint: Saves a model after every N epochs
+                if self.config.checkpoint_every and (epoch + 1) % self.config.checkpoint_every == 0:
+                    self.save_model(vocab, vocab_size, embedding_model, subdir=f"epoch_{epoch + 1}")
+                logger.info(f"Epoch {epoch + 1}/{self.config.epochs} completed. Loss: {loss.item():.4f}")
 
         # 5. Save the final trained model
         self.save_model(vocab, vocab_size, embedding_model)
