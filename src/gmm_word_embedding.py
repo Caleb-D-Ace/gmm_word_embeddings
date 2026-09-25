@@ -105,28 +105,20 @@ class GMMWordEmbedding(nn.Module):
 
         Math:
             E(f, g) = log(Σ_k Σ_m [ w_k * w_m * exp(log_Δ(f_k, g_m)) ])
+        Computed in log space with logsumexp, because exp() of typical log-overlaps (around -60 at D=50) underflows.
         Args:
             log_overlap_matrix (Tensor): Pairwise component log-overlaps of shape (batch_size, K, K)
             p1 (Tensor): Target word mixture weights of shape (batch_size, K)
             p2 (Tensor): Context word mixture weights of shape (batch_size, K)
         """
 
-        # Get the combined mixture weights for each pair of components
-        p1_expand = p1.unsqueeze(2)   # Shape: (batch_size, K, 1)
-        p2_expand = p2.unsqueeze(1)   # Shape: (batch_size, 1, K)
-        mix_weights = p1_expand * p2_expand  # Shape: (batch_size, K, K)
+        # Log of the combined mixture weight for each pair of components: log(w_k * w_m) = log(w_k) + log(w_m)
+        log_p1_expand = torch.log(p1).unsqueeze(2)   # Shape: (batch_size, K, 1)
+        log_p2_expand = torch.log(p2).unsqueeze(1)   # Shape: (batch_size, 1, K)
+        log_mix_weights = log_p1_expand + log_p2_expand  # Shape: (batch_size, K, K)
 
-        # Convert log-overlap from log-space to probability space so we can do calculations with it
-        overlap_prob = torch.exp(log_overlap_matrix)
-
-        # Calculate the weighted sum of overlaps
-        weighted_sum = mix_weights * overlap_prob  # Shape: (batch_size, K, K)
-
-        # Sum across both K axes 
-        sum_over_components = torch.sum(weighted_sum, dim=(-2, -1))  # Shape: (batch_size,) <- this is the final energy score for each batch item
-
-        # Return the log of the sum to get the final GMM energy in log space
-        return torch.log(sum_over_components + 1e-8)  # Shape: (batch_size,)
+        # log(Σ w_k * w_m * exp(log_Δ)) == logsumexp(log(w_k * w_m) + log_Δ), summed across both K axes
+        return torch.logsumexp(log_mix_weights + log_overlap_matrix, dim=(-2, -1))  # Shape: (batch_size,)
 
 
     def forward(self, target_ids: torch.Tensor, ctx_ids: torch.Tensor):
