@@ -14,9 +14,26 @@ def test_training_config_defaults():
     assert config.window_size == 5
     assert config.batch_size == 256
     assert config.epochs == 5
-    assert config.lr == 1e-3
+    assert config.optimizer == "adam"
+    assert config.lr == 0.01
+    assert config.lr_final == 1e-5
     assert config.margin == 1.0
     assert config.num_negatives == 1  # pinned until multi-negative training is implemented
+
+
+@pytest.mark.parametrize("name, expected", [("adagrad", torch.optim.Adagrad), ("adam", torch.optim.Adam)])
+def test_make_optimizer_builds_the_requested_optimizer(name, expected):
+    trainer = GmmTrainer(TrainingConfig(optimizer=name))
+    params = list(torch.nn.Linear(2, 2).parameters())
+
+    assert isinstance(trainer.make_optimizer(params), expected)
+
+
+def test_make_optimizer_rejects_unknown_names():
+    trainer = GmmTrainer(TrainingConfig(optimizer="sgd"))
+
+    with pytest.raises(ValueError):
+        trainer.make_optimizer(list(torch.nn.Linear(2, 2).parameters()))
 
 
 def test_trainer_init_stores_config_and_resolves_device():

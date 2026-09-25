@@ -66,3 +66,39 @@ def test_preprocess_corpus_bin_drops_out_of_vocab_words(tmp_path, monkeypatch):
     # "dog" is filtered out entirely (not kept as a placeholder), so all
     # three remaining tokens should be "cat"'s id (0).
     assert encoded.tolist() == [0, 0, 0]
+
+
+def _preprocess(tmp_path, monkeypatch, text, **kwargs):
+    monkeypatch.setattr(preprocess, "MIN_FREQ", 2)
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    processed_dir = tmp_path / "processed"
+    _write_corpus(raw_dir / "corpus.txt", text)
+    preprocess.preprocess_corpus(raw_dir=str(raw_dir), processed_dir=str(processed_dir), **kwargs)
+    vocab = json.loads((processed_dir / "sorted_vocab.json").read_text(encoding="utf-8"))
+    encoded = np.fromfile(processed_dir / "corpus_index.bin", dtype=np.uint16)
+    return vocab, encoded
+
+
+def test_preprocess_corpus_removes_stopwords_by_default(tmp_path, monkeypatch):
+    vocab, encoded = _preprocess(tmp_path, monkeypatch, "the cat the dog the cat the dog")
+
+    assert set(vocab) == {"cat", "dog"}
+    # Stopwords vanish from the encoded corpus entirely rather than leaving gaps.
+    assert encoded.tolist() == [0, 1, 0, 1]
+
+
+def test_preprocess_corpus_can_keep_stopwords(tmp_path, monkeypatch):
+    vocab, _ = _preprocess(tmp_path, monkeypatch, "the cat the dog the cat the dog", stopwords="none")
+
+    assert "the" in vocab
+
+
+def test_preprocess_corpus_accepts_a_custom_stopword_file(tmp_path, monkeypatch):
+    custom = tmp_path / "stop.txt"
+    custom.write_text("cat\n", encoding="utf-8")
+
+    vocab, _ = _preprocess(tmp_path, monkeypatch, "the cat the dog the cat the dog", stopwords=str(custom))
+
+    assert "cat" not in vocab
+    assert "the" in vocab  # only the words in the custom file are dropped
