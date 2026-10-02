@@ -99,6 +99,13 @@ def parse_args() -> TrainingConfig:
         default="logs/",
         help="Where to save the training logs (default: data/logs)"
     )
+    parser.add_argument(
+        "--resume_from",
+        type=str,
+        default=None,
+        help="Directory of a previous checkpoint (e.g. output_path/epoch_20) to continue training from. "
+             "Must be run with the same --processed_dir, --embedding_dim, --k, and --epochs as the original run."
+    )
 
     args = parser.parse_args()
     return TrainingConfig(**vars(args))

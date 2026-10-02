@@ -33,6 +33,7 @@ class TrainingConfig:
     margin: float = 1.0
     num_negatives: int = 1  # DO NOT CHANGE THIS VALUE. Code to support multiple negative samples is not yet implemented.
     checkpoint_every: int = 0  # 0 disables checkpointing; e.g. 10 saves a snapshot every 10 epochs into output_path/epoch_<N>/
+    resume_from: str = None  # Directory of a previous checkpoint (e.g. output_path/epoch_20) to continue training from; None starts fresh.
 
 # One batch's worth of numbers the epoch loop needs back from _run_batch: bundled into one
 # object instead of 4+ separate return values or 8+ separate arguments.
@@ -68,15 +69,15 @@ class GmmTrainer:
 
         # Create MetricsLogger object for logging
         with metrics_logger.MetricsLogger(self.config.log_dir) as metrics:
-            for epoch in range(self.config.epochs):
+            for epoch in range(self.start_epoch, self.config.epochs):
                 self._run_epoch(epoch, metrics)
 
                 # Periodic checkpoint: Saves a model after every N epochs
                 if self.config.checkpoint_every and (epoch + 1) % self.config.checkpoint_every == 0:
-                    self.save_model(subdir=f"epoch_{epoch + 1}")
+                    self.save_model(subdir=f"epoch_{epoch + 1}", next_epoch=epoch + 1)
 
         # Save the final trained model
-        self.save_model()
+        self.save_model(next_epoch=self.config.epochs)
 
 
     """ Validation method to verify that the processed directory contains the files preprocess.py produces """
@@ -110,6 +111,33 @@ class GmmTrainer:
         self.scheduler = torch.optim.lr_scheduler.LinearLR(
             self.optimizer, start_factor=1.0, end_factor=self.config.lr_final / self.config.lr, total_iters=total_steps
         )
+
+        self.start_epoch = self._load_checkpoint() if self.config.resume_from else 0
+
+    """ Loads model/optimizer/scheduler state from a previous checkpoint directory and returns the epoch
+        to resume at. Requires the checkpoint's vocab to exactly match the one we just built in _setup(),
+        since model rows are indexed by word id: silently loading a mismatched vocab would assign the
+        wrong word to every embedding row without raising an error. """
+    def _load_checkpoint(self) -> int:
+        resume_dir = Path(self.config.resume_from)
+
+        with open(resume_dir / "sorted_vocab.json", "r", encoding="utf-8") as f:
+            resumed_vocab = json.load(f)
+        if resumed_vocab != self.vocab:
+            raise ValueError(
+                f"Vocabulary saved in '{resume_dir}' does not match the vocabulary built from "
+                f"'{self.config.processed_dir}'. Resuming with a different vocab would silently "
+                f"assign the wrong word to every embedding row."
+            )
+
+        self.model.load_state_dict(torch.load(resume_dir / "gmm_embeddings.pt", map_location=self.device))
+
+        training_state = torch.load(resume_dir / "training_state.pt", map_location=self.device)
+        self.optimizer.load_state_dict(training_state["optimizer_state"])
+        self.scheduler.load_state_dict(training_state["scheduler_state"])
+
+        logger.info(f"Resumed from '{resume_dir}', continuing at epoch {training_state['next_epoch'] + 1}.")
+        return training_state["next_epoch"]
 
 
     """ Runs every batch in the dataloader once, accumulating and logging epoch-level metrics."""
@@ -199,8 +227,11 @@ class GmmTrainer:
     Parameters:
         subdir - optional subdirectory to store mid-training checkpoints (e.g. "epoch_10").
                  If None, we save in the main output_path directory (the final training run passes no subdir, since we want to save the final model).
+        next_epoch - the 0-based epoch index a --resume_from run should start at. Saved alongside the
+                     model so a later run can continue the same optimizer/scheduler trajectory instead
+                     of just warm-starting from these weights.
     """
-    def save_model(self, subdir: str = None):
+    def save_model(self, subdir: str = None, next_epoch: int = None):
         output_dir = Path(self.config.output_path)
         if subdir is not None:
             output_dir = output_dir / subdir
@@ -222,6 +253,17 @@ class GmmTrainer:
         # Keep a copy of the vocab with the model it was trained on so the two can't drift apart
         with open(output_dir / "sorted_vocab.json", "w", encoding="utf-8") as f:
             json.dump(self.vocab, f, ensure_ascii=False)
+
+        # Separate from gmm_embeddings.pt: this file is only for --resume_from, not for downstream
+        # users of the model, so it carries optimizer/scheduler state instead of just weights.
+        torch.save(
+            {
+                "optimizer_state": self.optimizer.state_dict(),
+                "scheduler_state": self.scheduler.state_dict(),
+                "next_epoch": next_epoch,
+            },
+            output_dir / "training_state.pt",
+        )
 
 
     @staticmethod
