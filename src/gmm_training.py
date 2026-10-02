@@ -43,6 +43,11 @@ class BatchStats:
     pos_energy: float
     neg_energy: float
     pair_count: int
+    grad_norm: float
+    mix_weight: float
+    var_min: float
+    var_max: float
+    var_mean: float
 
 """
 GmmTrainer runs through the .memmap file created by gmm_word_embedding.py, passes its data into PyTorch, and trains a probablistic
@@ -138,8 +143,8 @@ class GmmTrainer:
             metrics.writeRow(
                 epoch=epoch, batch=batch_idx, epoch_sec=epoch_elapsed_sec,
                 batch_sec=batch_elapsed_sec, loss=stats.loss, pos_energy=stats.pos_energy,
-                neg_energy=stats.neg_energy, active_pair=stats.active_fraction, grad_norm=0,
-                mix_weight=0, var_min=0, var_max=0, var_mean=0
+                neg_energy=stats.neg_energy, active_pair=stats.active_fraction, grad_norm=stats.grad_norm,
+                mix_weight=stats.mix_weight, var_min=stats.var_min, var_max=stats.var_max, var_mean=stats.var_mean
             )
 
         logger.info(
@@ -156,9 +161,18 @@ class GmmTrainer:
         e_pos = self.model.forward(target_ids, ctx_ids)
         e_neg = self.model.forward(target_ids, negative_samples)
 
+        # Get the means, variances, and mixture weights for the target words in this batch
+        with (torch.no_grad()):
+            mu, var, mix_weights = self.model.get_word_params(target_ids)
+            var_min = var.min().item()
+            var_max = var.max().item()
+            var_mean = var.mean().item()
+            mix_weight_spread = mix_weights.max(dim=-1).values.mean().item()
+
         # Compute the max-margin ranking loss
         loss, active_fraction = self.model.max_margin_ranking(e_pos, e_neg, self.config.margin)
         loss.backward()
+        grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=float("inf"))  # No clipping, but returns the norm for logging
         self.optimizer.step()
         self.scheduler.step()
         self.optimizer.zero_grad()
@@ -166,7 +180,8 @@ class GmmTrainer:
         return BatchStats(
             loss=loss.item(), active_fraction=active_fraction.item(),
             pos_energy=e_pos.mean().item(), neg_energy=e_neg.mean().item(),
-            pair_count=e_pos.numel(),
+            pair_count=e_pos.numel(), grad_norm=grad_norm.item(),
+            mix_weight=mix_weight_spread, var_min=var_min, var_max=var_max, var_mean=var_mean
         )
 
 
