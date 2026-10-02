@@ -6,6 +6,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Dict, Iterator, Tuple, Union
 
+import numpy as np
+
 from stopwords import load_stopwords
 
 """
@@ -16,6 +18,10 @@ Preprocess.py prepares a corpus for training.
     - Outputs corpus_index.bin, containing the entire corpus represented as integer indices
 """
 MIN_FREQ = 40   # The minimum occurrence amount required in order to be considered a part of the vocabulary
+
+def id_dtype(vocab_size: int):
+    # Preprocessing writes ids with this type and training must read them back with the same one
+    return np.uint16 if vocab_size <= 65535 else np.uint32
 
 def tokenize(text: str) -> Iterator[str]:
     # Use regex to find all words (alphanumeric sequences) in the text
@@ -135,8 +141,7 @@ def preprocess_corpus(
     with open(processed_path / "sorted_vocab.json", "w", encoding="utf-8") as f:
         json.dump(vocab, f, ensure_ascii=False)
 
-    use_uint16: bool = len(vocab) <= 65535
-    encoding_width = 'H' if use_uint16 else 'I'
+    encoding_width = 'H' if id_dtype(len(vocab)) is np.uint16 else 'I'
 
     # Write data to binary file
     out_file = processed_path / "corpus_index.bin"

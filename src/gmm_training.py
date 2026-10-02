@@ -11,6 +11,7 @@ from torch.utils.data import DataLoader
 from dataset import SkipGramDataset
 from gmm_word_embedding import GMMWordEmbedding
 import metrics_logger
+from preprocess import id_dtype
 from sampler import NegativeSampler
 
 logger = logging.getLogger(__name__)
@@ -60,7 +61,7 @@ class GmmTrainer:
         
         # 3. Instantiate pipelines
         embedding_model = GMMWordEmbedding(vocab_size, self.config.embedding_dim, self.config.K).to(self.device)
-        dataset = SkipGramDataset(bin_file=Path(self.config.processed_dir) / "corpus_index.bin", window_size=self.config.window_size)
+        dataset = SkipGramDataset(bin_file=Path(self.config.processed_dir) / "corpus_index.bin", window_size=self.config.window_size, dtype=id_dtype(vocab_size))
         sampler = NegativeSampler(word_counts=word_count_list)
 
         # Create DataLoader for batching and optimizer

@@ -68,6 +68,23 @@ def test_preprocess_corpus_bin_drops_out_of_vocab_words(tmp_path, monkeypatch):
     assert encoded.tolist() == [0, 0, 0]
 
 
+def test_id_dtype_widens_past_16_bits():
+    assert preprocess.id_dtype(65535) is np.uint16
+    assert preprocess.id_dtype(65536) is np.uint32
+
+
+def test_large_vocab_ids_round_trip_with_id_dtype(tmp_path, monkeypatch):
+    monkeypatch.setattr(preprocess, "MIN_FREQ", 1)
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    _write_corpus(raw_dir / "corpus.txt", " ".join(f"w{i}" for i in range(70000)))
+
+    preprocess.preprocess_corpus(raw_dir=str(raw_dir), processed_dir=str(tmp_path / "out"), stopwords="none")
+
+    encoded = np.fromfile(tmp_path / "out" / "corpus_index.bin", dtype=preprocess.id_dtype(70000))
+    assert encoded.tolist() == list(range(70000))
+
+
 def _preprocess(tmp_path, monkeypatch, text, **kwargs):
     monkeypatch.setattr(preprocess, "MIN_FREQ", 2)
     raw_dir = tmp_path / "raw"

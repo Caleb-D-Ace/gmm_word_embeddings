@@ -1,6 +1,8 @@
 import pytest
 import torch
 
+import gmm_training
+import preprocess
 from gmm_training import GmmTrainer, TrainingConfig
 
 
@@ -34,6 +36,34 @@ def test_make_optimizer_rejects_unknown_names():
 
     with pytest.raises(ValueError):
         trainer.make_optimizer(list(torch.nn.Linear(2, 2).parameters()))
+
+
+def test_trainer_reads_ids_with_the_width_preprocessing_wrote(tmp_path, monkeypatch):
+    # Over 65,535 words means 4-byte ids. Reading them as 2-byte ids used to double the token
+    # count and scramble every id without raising an error.
+    monkeypatch.setattr(preprocess, "MIN_FREQ", 1)
+    raw_dir = tmp_path / "raw"
+    raw_dir.mkdir()
+    (raw_dir / "corpus.txt").write_text(" ".join(f"w{i}" for i in range(70000)), encoding="utf-8")
+    preprocess.preprocess_corpus(raw_dir=str(raw_dir), processed_dir=str(tmp_path / "processed"), stopwords="none")
+
+    seen = {}
+
+    class SpyDataset(gmm_training.SkipGramDataset):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            seen["dataset"] = self
+
+    monkeypatch.setattr(gmm_training, "SkipGramDataset", SpyDataset)
+    config = TrainingConfig(
+        processed_dir=str(tmp_path / "processed"), output_path=str(tmp_path / "model"), log_dir=str(tmp_path / "logs"),
+        embedding_dim=2, K=1, window_size=2, batch_size=4096, epochs=1,
+    )
+    GmmTrainer(config).train()
+
+    dataset = seen["dataset"]
+    assert len(dataset) == 70000 - 4
+    assert dataset[10][0].item() == 12  # the center of window 10 is corpus position 12, whose id is 12
 
 
 def test_trainer_init_stores_config_and_resolves_device():
