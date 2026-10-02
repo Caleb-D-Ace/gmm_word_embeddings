@@ -154,4 +154,7 @@ class GMMWordEmbedding(nn.Module):
 
         hinge_loss = torch.clamp(losses, min=0.0)
 
-        return torch.mean(hinge_loss)
+        # Calculate the fraction of active pairs (those that contributed to the loss)
+        active_pairs = (hinge_loss > 0).float().mean()
+
+        return (torch.mean(hinge_loss), active_pairs)

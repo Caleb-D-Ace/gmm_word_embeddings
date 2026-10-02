@@ -96,15 +96,27 @@ def test_max_margin_ranking_zero_when_margin_already_satisfied():
     E_pos = torch.tensor([5.0, 5.0])
     E_neg = torch.tensor([0.0, 0.0])
 
-    loss = GMMWordEmbedding.max_margin_ranking(E_pos, E_neg, margin=1.0)
+    loss, active_fraction = GMMWordEmbedding.max_margin_ranking(E_pos, E_neg, margin=1.0)
 
     assert loss.item() == 0.0
+    assert active_fraction.item() == 0.0  # margin already satisfied on both pairs, so neither is active
 
 
 def test_max_margin_ranking_equals_margin_when_energies_tied():
     E_pos = torch.zeros(3)
     E_neg = torch.zeros(3)
 
-    loss = GMMWordEmbedding.max_margin_ranking(E_pos, E_neg, margin=2.0)
+    loss, active_fraction = GMMWordEmbedding.max_margin_ranking(E_pos, E_neg, margin=2.0)
 
     assert math.isclose(loss.item(), 2.0)
+    assert active_fraction.item() == 1.0  # all three pairs violate the margin
+
+
+def test_max_margin_ranking_active_fraction_counts_only_violating_pairs():
+    # First pair already satisfies the margin (hinge == 0); other two don't.
+    E_pos = torch.tensor([5.0, 0.0, 0.0])
+    E_neg = torch.tensor([0.0, 0.0, 0.0])
+
+    _, active_fraction = GMMWordEmbedding.max_margin_ranking(E_pos, E_neg, margin=1.0)
+
+    assert math.isclose(active_fraction.item(), 2 / 3, rel_tol=1e-6)

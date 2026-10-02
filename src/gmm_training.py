@@ -81,6 +81,8 @@ class GmmTrainer:
                 # Weight each batch's mean loss by its pair count so the epoch average is exact
                 epoch_loss_sum = 0.0
                 epoch_pair_count = 0
+                # reset the active pair count for this epoch
+                epoch_active_pairs = 0
 
                 for batch_idx, (centers, contexts) in enumerate(dataloader):
                     # Set starting batch timestamp
@@ -99,7 +101,7 @@ class GmmTrainer:
                     e_neg = embedding_model.forward(target_ids, negative_samples)
 
                     # Compute the max-margin ranking loss
-                    loss = embedding_model.max_margin_ranking(e_pos, e_neg, self.config.margin)
+                    loss, active_fraction = embedding_model.max_margin_ranking(e_pos, e_neg, self.config.margin)
                     loss.backward()
                     optimizer.step()
                     scheduler.step()
@@ -107,7 +109,10 @@ class GmmTrainer:
 
                     # Calculate time and other metric parameters
                     loss_item = loss.item()
+                    active_fraction_item = active_fraction.item()
                     epoch_loss_sum += loss_item * e_pos.numel()
+                    # Same pair-weighted accumulation as epoch_loss_sum, so the epoch average is exact
+                    epoch_active_pairs += active_fraction_item * e_pos.numel()
                     epoch_pair_count += e_pos.numel()
                     e_pos_mean = e_pos.mean().item()
                     e_neg_mean = e_neg.mean().item()
@@ -117,14 +122,18 @@ class GmmTrainer:
                     metrics.writeRow(
                         epoch=epoch, batch=batch_idx, epoch_sec=epoch_elapsed_sec,
                         batch_sec=batch_elapsed_sec, loss=loss_item, pos_energy=e_pos_mean,
-                        neg_energy=e_neg_mean, active_pair=0, grad_norm=0,
+                        neg_energy=e_neg_mean, active_pair=active_fraction_item, grad_norm=0,
                         mix_weight=0, var_min=0, var_max=0, var_mean=0
                     )
 
                 # Periodic checkpoint: Saves a model after every N epochs
                 if self.config.checkpoint_every and (epoch + 1) % self.config.checkpoint_every == 0:
                     self.save_model(vocab, vocab_size, embedding_model, subdir=f"epoch_{epoch + 1}")
-                logger.info(f"Epoch {epoch + 1}/{self.config.epochs} completed. Avg loss: {epoch_loss_sum / epoch_pair_count:.4f}")
+                logger.info(
+                    f"Epoch {epoch + 1}/{self.config.epochs} completed. "
+                    f"Avg loss: {epoch_loss_sum / epoch_pair_count:.4f}, "
+                    f"Active pairs: {epoch_active_pairs / epoch_pair_count:.4f}"
+                )
 
         # 5. Save the final trained model
         self.save_model(vocab, vocab_size, embedding_model)
