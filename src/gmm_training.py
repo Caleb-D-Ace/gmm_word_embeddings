@@ -69,12 +69,15 @@ class GmmTrainer:
 
         # Create MetricsLogger object for logging
         with metrics_logger.MetricsLogger(self.config.log_dir) as metrics:
+            print(f"Starting training for {self.config.epochs} epochs on device: {self.device}")
             for epoch in range(self.start_epoch, self.config.epochs):
+                print(f"Epoch {epoch + 1}/{self.config.epochs}")
                 self._run_epoch(epoch, metrics)
 
                 # Periodic checkpoint: Saves a model after every N epochs
                 if self.config.checkpoint_every and (epoch + 1) % self.config.checkpoint_every == 0:
                     self.save_model(subdir=f"epoch_{epoch + 1}", next_epoch=epoch + 1)
+                    print(f"Checkpoint saved for epoch {epoch + 1} at '{self.config.output_path}/epoch_{epoch + 1}'.")
 
         # Save the final trained model
         self.save_model(next_epoch=self.config.epochs)
@@ -149,6 +152,7 @@ class GmmTrainer:
         epoch_active_pairs = 0
 
         for batch_idx, (centers, contexts) in enumerate(self.dataloader):
+            print(f"\tProcessing batch {batch_idx + 1}/{len(self.dataloader)}")
             batch_start_time = time.perf_counter()
 
             centers = centers.to(self.device)
