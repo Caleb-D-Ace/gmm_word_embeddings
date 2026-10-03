@@ -152,7 +152,8 @@ class GmmTrainer:
         epoch_active_pairs = 0
 
         for batch_idx, (centers, contexts) in enumerate(self.dataloader):
-            print(f"\tProcessing batch {batch_idx + 1}/{len(self.dataloader)}")
+            if batch_idx % 10000 == 0 or batch_idx == len(self.dataloader) - 1:
+                print(f"\tProcessing batch {batch_idx + 1}/{len(self.dataloader)}")
             batch_start_time = time.perf_counter()
 
             centers = centers.to(self.device)
