@@ -17,6 +17,8 @@ from sampler import NegativeSampler
 logger = logging.getLogger(__name__)
 logging.basicConfig(level=logging.INFO)
 
+HEARTBEAT_INTERVAL_SEC = 300  # How often _run_epoch logs a liveness line during a long epoch
+
 @dataclass
 class TrainingConfig:
     processed_dir: str = "data/processed"
@@ -69,15 +71,14 @@ class GmmTrainer:
 
         # Create MetricsLogger object for logging
         with metrics_logger.MetricsLogger(self.config.log_dir) as metrics:
-            print(f"Starting training for {self.config.epochs} epochs on device: {self.device}")
+            logger.info(f"Starting training for {self.config.epochs} epochs on device: {self.device}")
             for epoch in range(self.start_epoch, self.config.epochs):
-                print(f"Epoch {epoch + 1}/{self.config.epochs}")
                 self._run_epoch(epoch, metrics)
 
                 # Periodic checkpoint: Saves a model after every N epochs
                 if self.config.checkpoint_every and (epoch + 1) % self.config.checkpoint_every == 0:
                     self.save_model(subdir=f"epoch_{epoch + 1}", next_epoch=epoch + 1)
-                    print(f"Checkpoint saved for epoch {epoch + 1} at '{self.config.output_path}/epoch_{epoch + 1}'.")
+                    logger.info(f"Checkpoint saved for epoch {epoch + 1} at '{self.config.output_path}/epoch_{epoch + 1}'.")
 
         # Save the final trained model
         self.save_model(next_epoch=self.config.epochs)
@@ -150,10 +151,9 @@ class GmmTrainer:
         epoch_loss_sum = 0.0
         epoch_pair_count = 0
         epoch_active_pairs = 0
+        last_heartbeat_sec = 0.0  # Seconds into this epoch when we last logged a liveness line
 
         for batch_idx, (centers, contexts) in enumerate(self.dataloader):
-            if batch_idx % 10000 == 0 or batch_idx == len(self.dataloader) - 1:
-                print(f"\tProcessing batch {batch_idx + 1}/{len(self.dataloader)}")
             batch_start_time = time.perf_counter()
 
             centers = centers.to(self.device)
@@ -179,6 +179,12 @@ class GmmTrainer:
                 neg_energy=stats.neg_energy, active_pair=stats.active_fraction, grad_norm=stats.grad_norm,
                 mix_weight=stats.mix_weight, var_min=stats.var_min, var_max=stats.var_max, var_mean=stats.var_mean
             )
+
+            # Liveness line for long epochs, gated by elapsed time rather than batch count so it
+            # doesn't need retuning for a different corpus size or batch size.
+            if epoch_elapsed_sec - last_heartbeat_sec >= HEARTBEAT_INTERVAL_SEC:
+                logger.info(f"Epoch {epoch + 1}/{self.config.epochs}: batch {batch_idx + 1}/{len(self.dataloader)} ({epoch_elapsed_sec:.0f}s elapsed)")
+                last_heartbeat_sec = epoch_elapsed_sec
 
         logger.info(
             f"Epoch {epoch + 1}/{self.config.epochs} completed. "
