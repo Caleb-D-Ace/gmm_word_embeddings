@@ -113,6 +113,24 @@ def parse_args() -> TrainingConfig:
         help="Background processes to prepare batches in parallel (default: 0, single-process). "
              "On a GPU machine, set this above 0 so the CPU can prepare the next batch while the GPU works on the current one."
     )
+    parser.add_argument(
+        "--var_lower",
+        type=float,
+        default=0.05,
+        help="Smallest variance any Gaussian component may have, per dimension; enforced after every optimizer step (default: 0.05)"
+    )
+    parser.add_argument(
+        "--var_upper",
+        type=float,
+        default=5.0,
+        help="Largest variance any Gaussian component may have, per dimension; enforced after every optimizer step (default: 5.0)"
+    )
+    parser.add_argument(
+        "--max_mean_norm",
+        type=float,
+        default=8.0,
+        help="Largest L2 norm any Gaussian component's mean may have; longer means are scaled back (default: 8.0)"
+    )
 
     args = parser.parse_args()
     return TrainingConfig(**vars(args))
