@@ -106,6 +106,13 @@ def parse_args() -> TrainingConfig:
         help="Directory of a previous checkpoint (e.g. output_path/epoch_20) to continue training from. "
              "Must be run with the same --processed_dir, --embedding_dim, --k, and --epochs as the original run."
     )
+    parser.add_argument(
+        "--num_workers",
+        type=int,
+        default=0,
+        help="Background processes to prepare batches in parallel (default: 0, single-process). "
+             "On a GPU machine, set this above 0 so the CPU can prepare the next batch while the GPU works on the current one."
+    )
 
     args = parser.parse_args()
     return TrainingConfig(**vars(args))
@@ -114,6 +121,7 @@ def parse_args() -> TrainingConfig:
 def main():
     config = parse_args()
     trainer = GmmTrainer(config)
+    print(f"Starting training with config: {config}")
     trainer.train()
 
 

@@ -47,6 +47,7 @@ Run `python main.py --help` for this list from the source of truth.
 | `--checkpoint_every` | `0` | Save a snapshot model into `output_path/epoch_<N>/` every N epochs (`0` disables it) |
 | `--resume_from` | `None` | Directory of a previous checkpoint to continue training from (see below) |
 | `--log_dir` | `logs/` | Where the per-batch training log CSV is written |
+| `--num_workers` | `0` | Background processes to prepare batches in parallel. Keep at `0` on a laptop; set above `0` on a GPU machine, sized to the CPUs available, so data loading doesn't leave the GPU idle between batches |
 | `--num_negatives` | `1` | Negative samples per positive pair — **don't change this yet**; multi-negative training isn't implemented (see [Stretch goals](ROADMAP.md#stretch-goals)) |
 
 This produces `data/model/gmm_embeddings.npz` and `data/model/gmm_embeddings.pt` (plus `training_state.pt`, covered below). See the main README's [How to use the resulting word embedding](../README.md#how-to-use-the-resulting-word-embedding) for what to do with them.

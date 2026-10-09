@@ -36,6 +36,7 @@ class TrainingConfig:
     num_negatives: int = 1  # DO NOT CHANGE THIS VALUE. Code to support multiple negative samples is not yet implemented.
     checkpoint_every: int = 0  # 0 disables checkpointing; e.g. 10 saves a snapshot every 10 epochs into output_path/epoch_<N>/
     resume_from: str = None  # Directory of a previous checkpoint (e.g. output_path/epoch_20) to continue training from; None starts fresh.
+    num_workers: int = 0  # Background processes to prepare batches in parallel; 0 means the main process does it
 
 # One batch's worth of numbers the epoch loop needs back from _run_batch: bundled into one
 # object instead of 4+ separate return values or 8+ separate arguments.
@@ -108,7 +109,11 @@ class GmmTrainer:
             window_size=self.config.window_size, dtype=id_dtype(self.vocab_size),
         )
         self.sampler = NegativeSampler(word_counts=word_count_list)
-        self.dataloader = DataLoader(self.dataset, batch_size=self.config.batch_size, shuffle=True)
+        # pin_memory only helps when there's a GPU to transfer pinned batches to; harmless but pointless on CPU
+        self.dataloader = DataLoader(
+            self.dataset, batch_size=self.config.batch_size, shuffle=True,
+            num_workers=self.config.num_workers, pin_memory=(self.device.type == "cuda"),
+        )
 
         self.optimizer = self.make_optimizer(self.model.parameters())
         total_steps = self.config.epochs * len(self.dataloader)
@@ -156,8 +161,10 @@ class GmmTrainer:
         for batch_idx, (centers, contexts) in enumerate(self.dataloader):
             batch_start_time = time.perf_counter()
 
-            centers = centers.to(self.device)
-            contexts = contexts.to(self.device)
+            # non_blocking only actually overlaps with compute when the source tensor is pinned
+            # (see pin_memory above); it's a harmless no-op otherwise.
+            centers = centers.to(self.device, non_blocking=True)
+            contexts = contexts.to(self.device, non_blocking=True)
 
             # Reshape the output of SkipGramDataset to match input shape of (target, context)
             target_ids, ctx_ids = self.reshape(centers, contexts)
