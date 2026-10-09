@@ -9,12 +9,27 @@ It uses the PyTorch.nn module to create a neural network trained using this ener
 The model is trained using a max-margin ranking loss function, which is implemented in the max_margin_ranking method.
 """
 class GMMWordEmbedding(nn.Module):
-    def __init__(self, vocab_size: int, embedding_dim: int = 50, K: int = 2):
+    VAR_FLOOR = 1e-4  # Added after softplus in get_word_params so a variance can never reach exactly 0
+
+    def __init__(self, vocab_size: int, embedding_dim: int = 50, K: int = 2,
+                 var_lower: float = 0.05, var_upper: float = 5.0, max_mean_norm: float = 8.0):
         super().__init__()
         # Set up the basic parameters for the equation. These are used in the log_overlap and gmm_energy functions.
         self.vocab_size = vocab_size    # Size of the vocabulary (number of unique words)
         self.D = embedding_dim          # Dimension of the embedding space
         self.K = K                      # How many modes there are
+
+        # Bounds enforced by project_parameters_() after every optimizer step. These are plain Python
+        # attributes rather than register_buffer() buffers on purpose: buffers get saved in the state_dict,
+        # so adding them would make every checkpoint saved before this change fail to load.
+        if not self.VAR_FLOOR < var_lower < var_upper:
+            raise ValueError(f"Need {self.VAR_FLOOR} < var_lower < var_upper, got var_lower={var_lower}, var_upper={var_upper}.")
+        self.var_lower = var_lower
+        self.var_upper = var_upper
+        self.max_mean_norm = max_mean_norm
+        # The bounds are given in variance space, but the projection clamps the raw (pre-softplus) weights, so convert them once here
+        self.raw_var_lower = self.inverse_var_transform(var_lower)
+        self.raw_var_upper = self.inverse_var_transform(var_upper)
 
         # Set up the embedding layers for the means, variances, and mixture weights. These are trainable parameters.
         self.mu_embeddings = nn.Embedding(vocab_size, K * self.D)
@@ -38,7 +53,7 @@ class GMMWordEmbedding(nn.Module):
         var = self.var_embeddings(word_ids)
 
         # Ensure variance is strictly positive using Exponential or Softplus
-        var = F.softplus(var) + 1e-4
+        var = F.softplus(var) + self.VAR_FLOOR
 
         # Reshape from (batch_size, K*D) to (batch_size, K, D)
         mu = mu.view(batch_size, self.K, self.D)
@@ -49,7 +64,45 @@ class GMMWordEmbedding(nn.Module):
         mix_weights = torch.softmax(mix_logits, dim=-1)  # Convert logits to probabilities
 
         return mu, var, mix_weights
-    
+
+    @classmethod
+    def inverse_var_transform(cls, var: float) -> float:
+        """
+        Inverts the variance transform in get_word_params, turning a variance into the raw weight that produces it.
+
+        Math:
+            var = softplus(raw) + floor = log(1 + e^raw) + floor   =>   raw = log(e^(var - floor) - 1)
+        math.expm1(x) computes e^x - 1 accurately even when x is tiny, where e^x - 1 would lose precision.
+        """
+        return math.log(math.expm1(var - cls.VAR_FLOOR))
+
+    @torch.no_grad()
+    def project_parameters_(self):
+        """
+        Pulls every word's variances and means back inside their bounds. Call this right after optimizer.step(),
+        so the optimizer takes an unconstrained step and then this projects the result back into the allowed region
+        (projected gradient descent). The trailing underscore follows PyTorch's convention for in-place methods.
+
+        @torch.no_grad() turns off autograd for the whole method. These edits are corrections to the weights, not
+        part of the computation being differentiated, and autograd refuses in-place edits to a leaf tensor that
+        requires grad anyway.
+
+        The whole table is projected, not just this batch's rows: Adam's momentum keeps moving rows that
+        weren't in the batch, so any row can drift out of bounds on any step.
+        """
+        # Variances: softplus is monotonic, so clamping the raw weight to [raw_lower, raw_upper] is the same as
+        # clamping the variance to [var_lower, var_upper]. clamp_ (with the underscore) edits the weight in place.
+        self.var_embeddings.weight.clamp_(self.raw_var_lower, self.raw_var_upper)
+
+        # Means: cap the L2 norm of each component's mean, not each word's whole row. view() returns a
+        # different-shaped window onto the same memory (no copy), so editing it in place edits the weight itself.
+        mu = self.mu_embeddings.weight.view(self.vocab_size, self.K, self.D)
+        norms = mu.norm(dim=-1, keepdim=True)  # (vocab_size, K, 1): keepdim leaves a size-1 axis so it broadcasts over D
+        # Scale factor is max_norm / norm for components over the cap and 1 for the rest. A zero norm gives
+        # inf, which the clamp also turns into 1.
+        scale = (self.max_mean_norm / norms).clamp(max=1.0)
+        mu.mul_(scale)
+
     @staticmethod
     def log_overlap(mu1, mu2, var1, var2):
         """

@@ -114,3 +114,21 @@ def test_reshape_pairs_each_center_with_its_flattened_context():
 
     assert torch.equal(target_ids, torch.tensor([5, 5, 5, 5, 9, 9, 9, 9]))
     assert torch.equal(ctx_ids, torch.tensor([1, 2, 3, 4, 6, 7, 8, 9]))
+
+
+def test_run_batch_keeps_parameters_inside_bounds():
+    trainer = GmmTrainer(TrainingConfig(lr=10.0, var_lower=0.5, var_upper=1.5, max_mean_norm=0.1))
+    trainer.device = torch.device("cpu")
+    trainer.model = gmm_training.GMMWordEmbedding(
+        20, 4, 2, var_lower=0.5, var_upper=1.5, max_mean_norm=0.1
+    )
+    trainer.optimizer = trainer.make_optimizer(trainer.model.parameters())
+    trainer.scheduler = torch.optim.lr_scheduler.ConstantLR(trainer.optimizer, factor=1.0)
+
+    # A huge learning rate pushes parameters well past these tight bounds in a single step
+    for _ in range(3):
+        trainer._run_batch(torch.arange(10), torch.arange(10, 20), torch.randint(0, 20, (10,)))
+
+    mu, var, _ = trainer.model.get_word_params(torch.arange(20))
+    assert var.min() >= 0.5 - 1e-5 and var.max() <= 1.5 + 1e-5
+    assert mu.norm(dim=-1).max() <= 0.1 + 1e-5

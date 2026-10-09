@@ -37,6 +37,9 @@ class TrainingConfig:
     checkpoint_every: int = 0  # 0 disables checkpointing; e.g. 10 saves a snapshot every 10 epochs into output_path/epoch_<N>/
     resume_from: str = None  # Directory of a previous checkpoint (e.g. output_path/epoch_20) to continue training from; None starts fresh.
     num_workers: int = 0  # Background processes to prepare batches in parallel; 0 means the main process does it
+    var_lower: float = 0.05  # Every variance is clamped to [var_lower, var_upper] after each optimizer step
+    var_upper: float = 5.0
+    max_mean_norm: float = 8.0  # Each component's mean vector is scaled back to this L2 norm if it grows past it
 
 # One batch's worth of numbers the epoch loop needs back from _run_batch: bundled into one
 # object instead of 4+ separate return values or 8+ separate arguments.
@@ -103,7 +106,10 @@ class GmmTrainer:
         self.vocab_size = len(self.vocab)
         word_count_list = [count for rank, count in sorted(self.vocab.values(), key=lambda x: x[0])]
 
-        self.model = GMMWordEmbedding(self.vocab_size, self.config.embedding_dim, self.config.K).to(self.device)
+        self.model = GMMWordEmbedding(
+            self.vocab_size, self.config.embedding_dim, self.config.K,
+            var_lower=self.config.var_lower, var_upper=self.config.var_upper, max_mean_norm=self.config.max_mean_norm,
+        ).to(self.device)
         self.dataset = SkipGramDataset(
             bin_file=Path(self.config.processed_dir) / "corpus_index.bin",
             window_size=self.config.window_size, dtype=id_dtype(self.vocab_size),
@@ -220,6 +226,7 @@ class GmmTrainer:
         loss.backward()
         grad_norm = torch.nn.utils.clip_grad_norm_(self.model.parameters(), max_norm=float("inf"))  # No clipping, but returns the norm for logging
         self.optimizer.step()
+        self.model.project_parameters_()  # Pull any variance or mean the step pushed out of bounds back in
         self.scheduler.step()
         self.optimizer.zero_grad()
 

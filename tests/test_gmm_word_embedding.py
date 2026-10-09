@@ -1,5 +1,6 @@
 import math
 
+import pytest
 import torch
 
 from gmm_word_embedding import GMMWordEmbedding
@@ -120,3 +121,57 @@ def test_max_margin_ranking_active_fraction_counts_only_violating_pairs():
     _, active_fraction = GMMWordEmbedding.max_margin_ranking(E_pos, E_neg, margin=1.0)
 
     assert math.isclose(active_fraction.item(), 2 / 3, rel_tol=1e-6)
+
+
+def test_inverse_var_transform_round_trips_through_get_word_params():
+    model = GMMWordEmbedding(vocab_size=1, embedding_dim=1, K=1)
+    with torch.no_grad():
+        model.var_embeddings.weight.fill_(GMMWordEmbedding.inverse_var_transform(0.3))
+
+    _, var, _ = model.get_word_params(torch.tensor([0]))
+
+    assert torch.allclose(var, torch.tensor(0.3), atol=1e-5)
+
+
+def test_project_parameters_clamps_variances_into_bounds():
+    model = GMMWordEmbedding(vocab_size=3, embedding_dim=4, K=2, var_lower=0.05, var_upper=5.0)
+    with torch.no_grad():
+        model.var_embeddings.weight[0].fill_(-20.0)  # softplus(-20) ~ 2e-9, far below var_lower
+        model.var_embeddings.weight[1].fill_(20.0)   # softplus(20) ~ 20, far above var_upper
+        model.var_embeddings.weight[2].fill_(0.5)    # var ~ 0.97, already inside the bounds
+
+    model.project_parameters_()
+    _, var, _ = model.get_word_params(torch.arange(3))
+
+    assert torch.allclose(var[0], torch.tensor(0.05), atol=1e-5)
+    assert torch.allclose(var[1], torch.tensor(5.0), atol=1e-4)
+    assert torch.allclose(model.var_embeddings.weight[2], torch.tensor(0.5))  # in-bounds rows are left alone
+
+
+def test_project_parameters_caps_each_component_mean_norm_separately():
+    model = GMMWordEmbedding(vocab_size=1, embedding_dim=2, K=2, max_mean_norm=8.0)
+    with torch.no_grad():
+        # Component 0 has norm 50 (over the cap); component 1 has norm 5 (under it). Capping the whole
+        # 4-long row instead would wrongly shrink component 1 too.
+        model.mu_embeddings.weight[0] = torch.tensor([30.0, 40.0, 3.0, 4.0])
+
+    model.project_parameters_()
+    mu, _, _ = model.get_word_params(torch.tensor([0]))
+
+    assert torch.allclose(mu[0, 0], torch.tensor([4.8, 6.4]))  # same direction, rescaled to norm 8
+    assert torch.allclose(mu[0, 1], torch.tensor([3.0, 4.0]))
+
+
+def test_project_parameters_leaves_a_zero_mean_unchanged():
+    model = GMMWordEmbedding(vocab_size=1, embedding_dim=3, K=1)
+    with torch.no_grad():
+        model.mu_embeddings.weight.zero_()
+
+    model.project_parameters_()
+
+    assert torch.all(model.mu_embeddings.weight == 0)  # max_norm / 0 = inf must not turn into NaN
+
+
+def test_rejects_variance_bounds_out_of_order():
+    with pytest.raises(ValueError):
+        GMMWordEmbedding(vocab_size=1, var_lower=5.0, var_upper=0.05)
