@@ -39,7 +39,7 @@ This repository is an offline training pipeline that turns a raw text corpus int
    ```
 
 3. Choose a corpus source:
-   - **Bring your own corpus** — place text or `.jsonl` files (any subfolder structure) inside `data/raw/`.
+   - **Bring your own corpus** — place `.txt`, `.jsonl`, `.csv`/`.tsv`, `.parquet`, or `.arrow` files (any subfolder structure, the first four optionally `.gz`/`.bz2`-compressed) inside `data/raw/`.
    - **Or download one from Hugging Face instead** — skip this step and pass `--hf_dataset` in step 4.
 
 4. Run preprocessing from the project root:
@@ -83,7 +83,7 @@ This repository is an offline training pipeline that turns a raw text corpus int
 Training happens in two independent stages:
 
 1. **Preprocessing** (`src/preprocess.py`) — tokenizes a corpus from either local files or a Hugging Face dataset, drops stopwords, and builds a vocabulary of every remaining word occurring at least `MIN_FREQ` times (40 by default — currently a constant at the top of the file, not yet a command-line option). Stopwords come from a built-in English list by default and can be changed with `--stopwords` (see [Differences from the original implementation](docs/DIFFERENCES.md)). The corpus can come from either of two sources:
-   - **Local files** (default) — every file under `--raw_dir` (default `data/raw/`), searched recursively. Plain text files are tokenized directly; `.jsonl` files have a configurable field (`--text_key`, default `text`) pulled out of each line first, so a pre-downloaded dump of JSON records works without conversion.
+   - **Local files** (default) — every file under `--raw_dir` (default `data/raw/`), searched recursively (hidden files like `.gitkeep` are skipped). Plain `.txt` files are tokenized directly; `.jsonl`/`.csv`/`.tsv`/`.parquet`/`.arrow` files have a configurable field or column (`--text_key`, default `text`) pulled out of each record first, so a pre-downloaded dump in any of those formats works without conversion. `.txt`/`.jsonl`/`.csv`/`.tsv` may also be `.gz`- or `.bz2`-compressed.
    - **A Hugging Face Hub dataset** (`--hf_dataset`, e.g. `wikimedia/wikipedia`, with optional `--hf_config`/`--hf_split`) — downloaded and cached by the [`datasets`](https://pypi.org/project/datasets/) library instead of being saved into `data/raw/`. `datasets` is an optional dependency, only needed for this path.
 
    Either way, it writes:

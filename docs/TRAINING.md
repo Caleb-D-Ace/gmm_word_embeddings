@@ -18,8 +18,8 @@ Run `python src/preprocess.py --help` for this list from the source of truth. `-
 | Flag | Default | Meaning |
 |---|---|---|
 | `--processed_dir` | `data/processed` | Where to write `sorted_vocab.json`/`corpus_index.bin` |
-| `--text_key` | `text` | Field name containing document text, used for `.jsonl` files and Hugging Face datasets |
-| `--raw_dir` | `data/raw` | Local file or directory of raw text/`.jsonl` files to preprocess |
+| `--text_key` | `text` | Field/column name containing document text, used for every local format except plain `.txt`, and for Hugging Face datasets |
+| `--raw_dir` | `data/raw` | Local file or directory to preprocess: `.txt`, `.jsonl`, `.csv`/`.tsv`, `.parquet`, or `.arrow` (the first four may also be `.gz`/`.bz2`-compressed) |
 | `--hf_dataset` | `None` | Hugging Face Hub dataset repo id to download instead of local files, e.g. `wikimedia/wikipedia` |
 | `--hf_config` | `None` | Dataset config/subset name required by some Hugging Face datasets, e.g. `20231101.simple` |
 | `--hf_split` | `train` | Dataset split to use for a Hugging Face dataset |

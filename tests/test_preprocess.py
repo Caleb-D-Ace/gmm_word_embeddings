@@ -162,11 +162,128 @@ def test_corpus_streamer_reads_parquet_files(tmp_path):
 
 
 def test_stream_file_rejects_unsupported_extensions(tmp_path):
-    file_path = tmp_path / "sample.csv"
-    file_path.write_text("cat,dog", encoding="utf-8")
+    file_path = tmp_path / "sample.docx"
+    file_path.write_text("cat dog", encoding="utf-8")
 
     with pytest.raises(ValueError):
         list(preprocess.corpus_streamer(tmp_path))
+
+
+def test_stream_file_rejects_compressed_parquet(tmp_path):
+    # Compression wrapping only makes sense for line-oriented formats (.txt/.jsonl/.csv/.tsv);
+    # .parquet already compresses internally and pyarrow doesn't read it from a stream.
+    file_path = tmp_path / "sample.parquet.gz"
+    file_path.write_bytes(b"not a real parquet file, just needs to exist")
+
+    with pytest.raises(ValueError):
+        list(preprocess.corpus_streamer(tmp_path))
+
+
+def test_token_streamer_reads_gzip_compressed_text(tmp_path):
+    import gzip
+
+    file_path = tmp_path / "sample.txt.gz"
+    with gzip.open(file_path, "wt", encoding="utf-8") as f:
+        f.write("cat dog")
+
+    tokens = list(preprocess.token_streamer(file_path, opener=gzip.open))
+
+    assert tokens == ["cat", "dog"]
+
+
+def test_jsonl_reader_reads_bz2_compressed_jsonl(tmp_path):
+    import bz2
+
+    file_path = tmp_path / "sample.jsonl.bz2"
+    with bz2.open(file_path, "wt", encoding="utf-8") as f:
+        f.write('{"text": "cat dog"}\n')
+
+    tokens = list(preprocess.jsonl_reader(file_path, opener=bz2.open))
+
+    assert tokens == ["cat", "dog"]
+
+
+def test_corpus_streamer_reads_gzip_compressed_jsonl(tmp_path):
+    import gzip
+
+    file_path = tmp_path / "sample.jsonl.gz"
+    with gzip.open(file_path, "wt", encoding="utf-8") as f:
+        f.write('{"text": "cat dog"}\n')
+
+    tokens = sorted(preprocess.corpus_streamer(tmp_path))
+
+    assert tokens == ["cat", "dog"]
+
+
+def test_csv_reader_pulls_the_configured_text_key(tmp_path):
+    file_path = tmp_path / "sample.csv"
+    file_path.write_text("title,text\nignored,cat dog\n", encoding="utf-8")
+
+    tokens = list(preprocess.csv_reader(file_path))
+
+    assert tokens == ["cat", "dog"]
+
+
+def test_corpus_streamer_reads_tsv_with_tab_delimiter(tmp_path):
+    file_path = tmp_path / "sample.tsv"
+    file_path.write_text("text\tlabel\ncat dog\tpositive\n", encoding="utf-8")
+
+    tokens = sorted(preprocess.corpus_streamer(tmp_path))
+
+    assert tokens == ["cat", "dog"]
+
+
+def test_csv_reader_treats_a_missing_value_as_empty(tmp_path):
+    # An empty CSV cell comes back as '' already, but a row shorter than the header gives
+    # DictReader's missing-column default (None) -- same null-safety case as the other readers.
+    file_path = tmp_path / "sample.csv"
+    file_path.write_text("text,label\ncat dog,positive\n,missing\n", encoding="utf-8")
+
+    tokens = list(preprocess.csv_reader(file_path))
+
+    assert tokens == ["cat", "dog"]
+
+
+def test_arrow_reader_reads_the_file_format(tmp_path):
+    import pyarrow as pa
+
+    file_path = tmp_path / "sample.arrow"
+    table = pa.table({"text": ["cat dog", None, "bird"]})
+    with pa.OSFile(str(file_path), "wb") as sink:
+        with pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+
+    tokens = list(preprocess.arrow_reader(file_path))
+
+    assert tokens == ["cat", "dog", "bird"]
+
+
+def test_arrow_reader_reads_the_stream_format(tmp_path):
+    import pyarrow as pa
+
+    file_path = tmp_path / "sample.arrow"
+    table = pa.table({"text": ["one two"]})
+    with pa.OSFile(str(file_path), "wb") as sink:
+        with pa.ipc.new_stream(sink, table.schema) as writer:
+            writer.write_table(table)
+
+    tokens = list(preprocess.arrow_reader(file_path))
+
+    assert tokens == ["one", "two"]
+
+
+def test_corpus_streamer_reads_arrow_files(tmp_path):
+    import pyarrow as pa
+
+    file_path = tmp_path / "sample.arrow"
+    table = pa.table({"text": ["cat dog"]})
+    with pa.OSFile(str(file_path), "wb") as sink:
+        with pa.ipc.new_file(sink, table.schema) as writer:
+            writer.write_table(table)
+
+    tokens = sorted(preprocess.corpus_streamer(tmp_path))
+
+    assert tokens == ["cat", "dog"]
 
 
 def test_corpus_streamer_skips_hidden_files(tmp_path):

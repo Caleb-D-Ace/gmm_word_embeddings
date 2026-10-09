@@ -1,4 +1,7 @@
 import argparse
+import bz2
+import csv
+import gzip
 import json
 import re
 import struct
@@ -12,7 +15,8 @@ from stopwords import load_stopwords
 
 """
 Preprocess.py prepares a corpus for training.
-    - Tokenizes every word in the corpus (from local text/.jsonl files, or a Hugging Face dataset)
+    - Tokenizes every word in the corpus, from local files (.txt, .jsonl, .csv/.tsv, .parquet, .arrow;
+      the first four may also be .gz/.bz2-compressed) or a Hugging Face dataset
     - Creates a frequency count for each token
     - Indexes all words of a frequency above MIN_FREQ and creates word_to_id and id_to_word for easy index/word translation
     - Outputs corpus_index.bin, containing the entire corpus represented as integer indices
@@ -29,15 +33,19 @@ def tokenize(text: str) -> Iterator[str]:
     for match in word_regex.finditer(text):
         yield match.group().lower()
 
+# Compressed text/jsonl/csv is opened through gzip/bz2 instead of the builtin open, but otherwise
+# read exactly the same way -- both support the same mode/encoding/errors/newline arguments.
+_COMPRESSION_OPENERS = {'.gz': gzip.open, '.bz2': bz2.open}
+
 # Method to stream a plain text file word-by-word, yielding cleaned tokens as it goes
-def token_streamer(file_path: Path) -> Iterator[str]:
-    with open(file_path, 'r', encoding = 'utf-8', errors='ignore') as file:
+def token_streamer(file_path: Path, opener=open) -> Iterator[str]:
+    with opener(file_path, 'rt', encoding = 'utf-8', errors='ignore') as file:
         for line in file:
             yield from tokenize(line)
 
 # Method to stream a .jsonl file, pulling text_key out of each record before tokenizing it
-def jsonl_reader(file_path: Path, text_key: str = 'text') -> Iterator[str]:
-    with open(file_path, 'r', encoding = 'utf-8', errors='ignore') as file:
+def jsonl_reader(file_path: Path, text_key: str = 'text', opener=open) -> Iterator[str]:
+    with opener(file_path, 'rt', encoding = 'utf-8', errors='ignore') as file:
         for line in file:
             line = line.strip()
             if not line:
@@ -51,6 +59,16 @@ def jsonl_reader(file_path: Path, text_key: str = 'text') -> Iterator[str]:
             # to None, which .get() returns as-is since the key IS present, crashing tokenize().
             yield from tokenize(data.get(text_key) or '')
 
+# Method to stream a .csv/.tsv file, pulling text_key out of each row before tokenizing it.
+# Assumes the first row is a header, same as csv.DictReader.
+def csv_reader(file_path: Path, text_key: str = 'text', opener=open, delimiter: str = ',') -> Iterator[str]:
+    # newline='' is the csv module's own recommendation, so it can handle embedded newlines
+    # inside quoted fields itself rather than the file iterator splitting on them first.
+    with opener(file_path, 'rt', encoding='utf-8', errors='ignore', newline='') as file:
+        for row in csv.DictReader(file, delimiter=delimiter):
+            yield from tokenize(row.get(text_key) or '')
+
+# Method to strea
 def parquet_reader(file_path: Path, text_key: str = 'text') -> Iterator[str]:
     try:
         import pyarrow.parquet as pq
@@ -65,20 +83,64 @@ def parquet_reader(file_path: Path, text_key: str = 'text') -> Iterator[str]:
             # present, so a null value would reach .get() as None rather than the '' default.
             yield from tokenize(record.get(text_key) or '')
 
+# Method to stream a raw Apache Arrow IPC file (what Hugging Face `datasets` itself stores its
+# on-disk cache as) -- not to be confused with .parquet, a different on-disk format.
+def arrow_reader(file_path: Path, text_key: str = 'text') -> Iterator[str]:
+    try:
+        import pyarrow as pa
+    except ImportError as e:
+        raise ImportError(
+            "The 'pyarrow' package is required to read .arrow files. Install it with: pip install pyarrow"
+        ) from e
+
+    with pa.memory_map(str(file_path), 'r') as source:
+        # The .arrow extension doesn't say which of the two Arrow IPC sub-formats a file uses:
+        # a random-access "file" with a footer (what datasets' own cache uses), or a sequential
+        # "stream" without one. Try the file format first and fall back to the stream format.
+        try:
+            reader = pa.ipc.open_file(source)
+        except pa.lib.ArrowInvalid:
+            source.seek(0)
+            reader = pa.ipc.open_stream(source)
+
+        # RecordBatchFileReader (file format) is random-access, not an iterator, so it needs
+        # get_batch(i); RecordBatchStreamReader (stream format) is already an iterator.
+        batches = (reader.get_batch(i) for i in range(reader.num_record_batches)) if hasattr(reader, 'num_record_batches') else reader
+        for batch in batches:
+            for value in batch.column(text_key).to_pylist():
+                yield from tokenize(value or '')
+
 # Method to stream a single local file, dispatching by extension.
 # Only known corpus formats are accepted; anything else raises rather than being
 # silently decoded as text, which would tokenize binary garbage without erroring.
 def _stream_file(file_path: Path, text_key: str) -> Iterator[str]:
-    if file_path.suffix == '.jsonl':
-        yield from jsonl_reader(file_path, text_key)
-    elif file_path.suffix == '.parquet':
+    opener = open
+    suffix = file_path.suffix
+    if suffix in _COMPRESSION_OPENERS:
+        opener = _COMPRESSION_OPENERS[suffix]
+        suffix = Path(file_path.stem).suffix  # the extension underneath the compression, e.g. .jsonl in corpus.jsonl.gz
+
+    if suffix == '.jsonl':
+        yield from jsonl_reader(file_path, text_key, opener=opener)
+    elif suffix == '.txt':
+        yield from token_streamer(file_path, opener=opener)
+    elif suffix == '.csv':
+        yield from csv_reader(file_path, text_key, opener=opener, delimiter=',')
+    elif suffix == '.tsv':
+        yield from csv_reader(file_path, text_key, opener=opener, delimiter='\t')
+    elif opener is not open:
+        # .parquet/.arrow wrapped in .gz/.bz2 isn't supported: both formats already compress
+        # internally, and pyarrow reads them via direct/memory-mapped file access, not a stream.
+        raise ValueError(f"Compressed '{file_path.name}' isn't supported for this file type.")
+    elif suffix == '.parquet':
         yield from parquet_reader(file_path, text_key)
-    elif file_path.suffix == '.txt':
-        yield from token_streamer(file_path)
+    elif suffix == '.arrow':
+        yield from arrow_reader(file_path, text_key)
     else:
         raise ValueError(
             f"Unsupported corpus file type '{file_path.suffix}' for {file_path}. "
-            f"Supported extensions are .txt, .jsonl, and .parquet."
+            f"Supported extensions are .txt, .jsonl, .csv, .tsv, .parquet, .arrow "
+            f"(.txt/.jsonl/.csv/.tsv may also be .gz- or .bz2-compressed)."
         )
 
 # Method to run through every file in a local corpus directory (or single file) and yield its tokens
@@ -189,13 +251,15 @@ def main():
     )
     parser.add_argument(
         "--text_key", type=str, default="text",
-        help="Field name containing document text, used for .jsonl files and Hugging Face datasets (default: text)"
+        help="Field/column name containing document text, used for every local format except plain .txt, "
+             "and for Hugging Face datasets (default: text)"
     )
 
     source_group = parser.add_mutually_exclusive_group()
     source_group.add_argument(
         "--raw_dir", type=str, default="data/raw",
-        help="Local file or directory of raw text/.jsonl files to preprocess (default: data/raw)"
+        help="Local file or directory to preprocess: .txt, .jsonl, .csv/.tsv, .parquet, or .arrow "
+             "(the first four may also be .gz/.bz2-compressed) (default: data/raw)"
     )
     source_group.add_argument(
         "--hf_dataset", type=str, default=None,
