@@ -1,6 +1,8 @@
 import json
 
 import numpy as np
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
 import preprocess
@@ -119,3 +121,61 @@ def test_preprocess_corpus_accepts_a_custom_stopword_file(tmp_path, monkeypatch)
 
     assert "cat" not in vocab
     assert "the" in vocab  # only the words in the custom file are dropped
+
+
+def test_jsonl_reader_treats_a_null_text_value_as_empty(tmp_path):
+    # A JSON `null` deserializes to Python None, which .get(key, default) returns as-is
+    # since the key IS present -- tokenize(None) used to crash on this.
+    file_path = tmp_path / "sample.jsonl"
+    file_path.write_text('{"text": null}\n{"text": "cat dog"}\n', encoding="utf-8")
+
+    tokens = list(preprocess.jsonl_reader(file_path))
+
+    assert tokens == ["cat", "dog"]
+
+
+def test_parquet_reader_treats_a_null_text_value_as_empty(tmp_path):
+    file_path = tmp_path / "sample.parquet"
+    pq.write_table(pa.table({"text": ["cat dog", None, "bird"]}), file_path)
+
+    tokens = list(preprocess.parquet_reader(file_path))
+
+    assert tokens == ["cat", "dog", "bird"]
+
+
+def test_parquet_reader_pulls_the_configured_text_key(tmp_path):
+    file_path = tmp_path / "sample.parquet"
+    pq.write_table(pa.table({"body": ["one two"], "title": ["ignored"]}), file_path)
+
+    tokens = list(preprocess.parquet_reader(file_path, text_key="body"))
+
+    assert tokens == ["one", "two"]
+
+
+def test_corpus_streamer_reads_parquet_files(tmp_path):
+    file_path = tmp_path / "sample.parquet"
+    pq.write_table(pa.table({"text": ["cat dog"]}), file_path)
+
+    tokens = sorted(preprocess.corpus_streamer(tmp_path))
+
+    assert tokens == ["cat", "dog"]
+
+
+def test_stream_file_rejects_unsupported_extensions(tmp_path):
+    file_path = tmp_path / "sample.csv"
+    file_path.write_text("cat,dog", encoding="utf-8")
+
+    with pytest.raises(ValueError):
+        list(preprocess.corpus_streamer(tmp_path))
+
+
+def test_corpus_streamer_skips_hidden_files(tmp_path):
+    # .gitkeep and similar dotfiles are filesystem/git bookkeeping, not corpus content --
+    # they shouldn't be tokenized, and (since they have no recognized extension) shouldn't
+    # raise either.
+    (tmp_path / ".gitkeep").write_text("", encoding="utf-8")
+    _write_corpus(tmp_path / "corpus.txt", "cat dog")
+
+    tokens = sorted(preprocess.corpus_streamer(tmp_path))
+
+    assert tokens == ["cat", "dog"]

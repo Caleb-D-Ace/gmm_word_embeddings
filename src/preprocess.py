@@ -47,14 +47,39 @@ def jsonl_reader(file_path: Path, text_key: str = 'text') -> Iterator[str]:
             except json.JSONDecodeError:
                 # Skip malformed lines rather than failing the whole corpus
                 continue
-            yield from tokenize(data.get(text_key, ''))
+            # .get(text_key, '') would only catch a missing key — a JSON `null` value deserializes
+            # to None, which .get() returns as-is since the key IS present, crashing tokenize().
+            yield from tokenize(data.get(text_key) or '')
 
-# Method to stream a single local file, dispatching by extension
+def parquet_reader(file_path: Path, text_key: str = 'text') -> Iterator[str]:
+    try:
+        import pyarrow.parquet as pq
+    except ImportError as e:
+        raise ImportError(
+            "The 'pyarrow' package is required to read .parquet files. Install it with: pip install pyarrow"
+        ) from e
+    parquet_file = pq.ParquetFile(file_path)
+    for batch in parquet_file.iter_batches(columns=[text_key]):
+        for record in batch.to_pylist():
+            # Same reasoning as jsonl_reader above: columns=[text_key] means the key is always
+            # present, so a null value would reach .get() as None rather than the '' default.
+            yield from tokenize(record.get(text_key) or '')
+
+# Method to stream a single local file, dispatching by extension.
+# Only known corpus formats are accepted; anything else raises rather than being
+# silently decoded as text, which would tokenize binary garbage without erroring.
 def _stream_file(file_path: Path, text_key: str) -> Iterator[str]:
     if file_path.suffix == '.jsonl':
         yield from jsonl_reader(file_path, text_key)
-    else:
+    elif file_path.suffix == '.parquet':
+        yield from parquet_reader(file_path, text_key)
+    elif file_path.suffix == '.txt':
         yield from token_streamer(file_path)
+    else:
+        raise ValueError(
+            f"Unsupported corpus file type '{file_path.suffix}' for {file_path}. "
+            f"Supported extensions are .txt, .jsonl, and .parquet."
+        )
 
 # Method to run through every file in a local corpus directory (or single file) and yield its tokens
 def _local_corpus_streamer(raw_dir: Union[str, Path], text_key: str = 'text') -> Iterator[str]:
@@ -65,7 +90,9 @@ def _local_corpus_streamer(raw_dir: Union[str, Path], text_key: str = 'text') ->
     elif path.is_dir():
         # rglob('*') recursively finds all files inside subfolders of 'path'
         for file_path in path.rglob('*'):
-            if file_path.is_file():
+            # Skip hidden files (e.g. .gitkeep, .DS_Store) rather than raising on them --
+            # they're not corpus content, just filesystem/git bookkeeping.
+            if file_path.is_file() and not file_path.name.startswith('.'):
                 yield from _stream_file(file_path, text_key)
     else:
         raise FileNotFoundError(f"Corpus input path {raw_dir} does not exist.")
