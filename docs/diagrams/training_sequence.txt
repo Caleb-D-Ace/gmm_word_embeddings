@@ -1,0 +1,105 @@
+title GMM Word Embedding Training
+
+actor User
+participant "main.py" as Main
+participant "GmmTrainer" as Trainer
+database "data/processed" as Processed
+participant "DataLoader" as Loader
+participant "SkipGramDataset" as Dataset
+participant "NegativeSampler" as Sampler
+participant "GMMWordEmbedding" as Model
+participant "Adam +\nLinearLR" as Optim
+participant "MetricsLogger" as Metrics
+database "data/model" as Output
+
+User->Main:python main.py [flags]
+Main->Main:parse_args() → TrainingConfig
+Main->*Trainer:GmmTrainer(config)
+note over Trainer:device = cuda if available, else cpu
+Main->Trainer:train()
+activate Trainer
+
+==Validate and set up==
+
+Trainer->Processed:_validate_processed_dir()\ncheck sorted_vocab.json and corpus_index.bin exist
+Trainer->Processed:_setup(): load sorted_vocab.json
+Processed-->Trainer:vocab {word: [id, count]}
+Trainer->*Model:GMMWordEmbedding(V, D, K, var bounds, max_mean_norm).to(device)
+note over Model:mu_embeddings (V, K·D)\nvar_embeddings (V, K·D), raw values before softplus\nmix_logits (V, K)
+Trainer->*Dataset:SkipGramDataset(corpus_index.bin, window_size)
+Dataset->Processed:np.memmap(corpus_index.bin)\nread on demand, never fully loaded into RAM
+Trainer->*Sampler:NegativeSampler(word counts)
+note over Sampler:sampling weight ∝ count^0.75
+Trainer->*Loader:DataLoader(dataset, batch_size, shuffle=True, num_workers)
+Trainer->*Optim:make_optimizer(model.parameters())\nLinearLR: lr → lr_final over epochs × batches_per_epoch
+
+opt --resume_from given
+Trainer->Output:_load_checkpoint(): read sorted_vocab.json
+note over Trainer:raises ValueError if the checkpoint's vocab\ndoesn't exactly match the current vocab
+Trainer->Model:load_state_dict(gmm_embeddings.pt)
+Trainer->Optim:load optimizer + scheduler state (training_state.pt)
+note over Trainer:start_epoch = saved next_epoch
+end
+
+Trainer->*Metrics:MetricsLogger(log_dir), entered as a with-block
+Metrics->Metrics:create training_log_<timestamp>.csv, write header
+
+==Training==
+
+loop epoch in start_epoch .. epochs - 1
+Trainer->Trainer:_run_epoch(epoch)
+
+loop each batch, in shuffled order
+Loader->Dataset:__getitem__(idx), batch_size times\n(inside worker processes when num_workers > 0)
+Dataset-->Loader:center id, 2·window context ids
+Loader-->Trainer:centers (B,), contexts (B, 2W)
+Trainer->Trainer:reshape() → target_ids, ctx_ids\nB·2W aligned pairs, each center repeated once per context word
+Trainer->Sampler:sample(B·2W)
+Sampler-->Trainer:negative ids, one per pair
+
+Trainer->Trainer:_run_batch()
+activate Trainer
+Trainer->Model:forward(target_ids, ctx_ids)
+Model->Model:get_word_params() → log_overlap() → gmm_energy()
+Model-->Trainer:E_pos
+Trainer->Model:forward(target_ids, negative_ids)
+Model-->Trainer:E_neg
+Trainer->Model:get_word_params(target_ids), under no_grad
+Model-->Trainer:variance + mixture-weight stats, for logging only
+Trainer->Model:max_margin_ranking(E_pos, E_neg, margin)
+Model-->Trainer:loss = mean(max(0, margin − E_pos + E_neg))\nactive pair fraction
+Trainer->Model:loss.backward()
+note over Model:autograd fills .grad on\nall three embedding tables
+Trainer->Trainer:clip_grad_norm_(max_norm=inf)\nmeasures the gradient norm, clips nothing
+Trainer->Optim:optimizer.step()
+Optim->Model:update weights in place
+Trainer->Model:project_parameters_()
+note over Model:clamp every variance into [var_lower, var_upper]\nscale any component mean longer than max_mean_norm back to it
+Trainer->Optim:scheduler.step() lowers the LR\noptimizer.zero_grad()
+deactivate Trainer
+
+Trainer->Metrics:writeRow(loss, energies, active fraction,\ngradient norm, mix spread, var stats)
+
+opt HEARTBEAT_INTERVAL_SEC passed since last heartbeat
+Trainer->Trainer:logger.info(batch progress)
+end
+end
+
+Trainer->Trainer:logger.info(epoch avg loss, active pairs)
+
+opt checkpoint_every > 0 and (epoch + 1) % checkpoint_every == 0
+Trainer->Output:save_model(subdir="epoch_N", next_epoch)\nsame four files as the final save, into data/model/epoch_N/
+end
+end
+
+Trainer->Metrics:exit with-block
+Metrics->Metrics:close CSV
+
+==Save final model==
+
+Trainer->Model:get_word_params(every word id), under no_grad
+Model-->Trainer:mu, var after softplus, mix_weights after softmax
+Trainer->Output:gmm_embeddings.npz (mu, var, mix_weights)\ngmm_embeddings.pt (state_dict)\nsorted_vocab.json\ntraining_state.pt (optimizer, scheduler, next_epoch)
+Trainer-->Main:
+deactivate Trainer
+Main-->User:training complete

@@ -8,9 +8,13 @@ env/
 # Data & Output Model Artifacts (Ignore heavy binaries)
 data/raw/*
 data/processed/*
+data/model/*
+logs/*
 .pytest_cache/
 !data/raw/.gitkeep
 !data/processed/.gitkeep
+!data/model/.gitkeep
+!logs/.gitkeep
 *.bin
 *.npz
 *.pt
